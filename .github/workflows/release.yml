@@ -85,8 +85,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p out
-          gh release download "${{ github.ref_name }}" \
-            --repo "${{ github.repository }}" --dir out --pattern '*'
+          TAG="${{ github.ref_name }}"
+          REPO="${{ github.repository }}"
+          # `gh release download` can't resolve drafts by tag, so find the
+          # release (incl. drafts) via the API and pull each asset by id.
+          REL=$(gh api "repos/$REPO/releases" --paginate \
+            --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -1)
+          echo "release id: $REL"
+          gh api "repos/$REPO/releases/$REL/assets" --paginate \
+            --jq '.[] | "\(.id)\t\(.name)"' | while IFS=$'\t' read -r id name; do
+            echo "downloading $name"
+            gh api "repos/$REPO/releases/$REL/assets/$id" \
+              -H "Accept: application/octet-stream" > "out/$name"
+          done
           ls -la out
 
       - name: Point latest.json at the public releases repo
