@@ -517,9 +517,8 @@ function SeedButton({
         <div className="seed-form">
           {sameMap.length === 0 ? (
             <span className="hint">
-              No save on <b>{mapTitle || "this map"}</b> yet. Start a new game on
-              it in FS25, save immediately, then ⭐ mark it as this map's template
-              (Saves tab) — Seed will clone that.
+              No save on <b>{mapTitle || "this map"}</b> yet. Start one in FS25,
+              save it, then ⭐ it in the Saves tab.
             </span>
           ) : (
             <>
