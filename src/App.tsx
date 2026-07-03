@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getVersion } from "@tauri-apps/api/app";
 import {
   api,
   Config,
@@ -612,6 +613,11 @@ function Settings({
   const [saved, setSaved] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [appVersion, setAppVersion] = useState("");
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => {});
+  }, []);
   const [health, setHealth] = useState<HealthReport | null>(null);
   const [healthMsg, setHealthMsg] = useState<string | null>(null);
   const [sync, setSync] = useState<SyncStatus | null>(null);
@@ -910,6 +916,30 @@ function Settings({
           </>
         )}
         {syncMsg && <span className="ok">{syncMsg}</span>}
+      </div>
+
+      <div className="field import-box">
+        About
+        <span className="hint">
+          FS25 Mod Manager{appVersion ? ` v${appVersion}` : ""} — updates are
+          signed and delivered automatically from GitHub Releases.
+        </span>
+        <div className="editor-actions">
+          <button
+            className="btn"
+            disabled={checkingUpdate}
+            onClick={async () => {
+              setCheckingUpdate(true);
+              try {
+                await checkForUpdate(true);
+              } finally {
+                setCheckingUpdate(false);
+              }
+            }}
+          >
+            {checkingUpdate ? "Checking…" : "⬆ Check for updates"}
+          </button>
+        </div>
       </div>
     </div>
   );
