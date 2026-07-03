@@ -115,12 +115,16 @@ export default function Scenarios({
 
   async function reload() {
     try {
-      const [s, sg] = await Promise.all([
+      const [s, sg, sl, tpl] = await Promise.all([
         api.listScenarios(),
         api.listSavegames(),
+        api.listSlots(),
+        api.getTemplates(),
       ]);
       setScenarios(s);
       setSaves(sg);
+      setSlots(sl);
+      setTemplates(tpl);
     } catch (e) {
       setError(String(e));
     }
