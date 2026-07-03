@@ -1,0 +1,31 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    "group:allNonMajor",
+    "schedule:weekly"
+  ],
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 2,
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "reqwest is pinned to 0.12 by tauri-plugin-http — don't propose 0.13+",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["reqwest"],
+      "allowedVersions": "<0.13"
+    },
+    {
+      "description": "Major bumps to the Tauri stack need manual approval (they move together)",
+      "matchPackageNames": [
+        "tauri",
+        "@tauri-apps/api",
+        "/^tauri-plugin-/",
+        "/^@tauri-apps\\//"
+      ],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    }
+  ]
+}
