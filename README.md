@@ -106,6 +106,30 @@ save; they're tracked, not enforced in-game.
 
 Import loose mods from the game folder in **Settings → Import from mods folder**.
 
+## Development & maintenance
+
+```sh
+pnpm test                 # frontend unit tests (vitest)
+pnpm run typecheck        # tsc --noEmit
+cargo test  --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+```
+
+CI (`.github/workflows/ci.yml`) runs the Rust (fmt/clippy/test) and frontend
+(typecheck/test) checks on every push and PR, so dependency-bot PRs are verified
+before merge.
+
+**Notes for future-you:**
+- The **Developer ID signing cert** expires ~5 years after issue — when it does,
+  local signing and CI signing/notarization break until you renew it (Apple
+  Developer portal) and update `tauri.conf.json` + the `APPLE_*` repo secrets.
+- The `glib` Dependabot alert is a **transitive, Linux-only** dependency of
+  Tauri's GTK stack — not reachable in the shipped macOS/Windows app; it clears
+  when Tauri bumps its dependencies.
+- **Discover** parses ModHub HTML, so it can break if GIANTS changes their page
+  markup — the selectors live in `src/scraper.ts` (unit-tested) and the CDN URL
+  regex in `src-tauri/src/lib.rs`. Cached data keeps working offline regardless.
+
 ## Roadmap
 
 - True net-worth (sum vehicle/land/building assets — not in the save directly).

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fetch as httpFetch } from "@tauri-apps/plugin-http";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, ModHubEntry, ModItem } from "./api";
+import { parseModhub } from "./scraper";
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
@@ -39,32 +40,6 @@ export async function modhubSearch(term: string): Promise<ModHubEntry[]> {
   });
   if (!res.ok) return [];
   return parseModhub(await res.text(), "");
-}
-
-export function parseModhub(html: string, category: string): ModHubEntry[] {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  return [...doc.querySelectorAll(".mod-item")]
-    .map((el): ModHubEntry => {
-      const href =
-        el.querySelector('a[href*="mod_id="]')?.getAttribute("href") ?? "";
-      const modId = href.match(/mod_id=(\d+)/)?.[1] ?? "";
-      const title = el.querySelector("h4")?.textContent?.trim() ?? "";
-      const author = (
-        el.querySelector(".mod-item__content p span")?.textContent ?? ""
-      )
-        .replace(/^By:\s*/i, "")
-        .trim();
-      return {
-        modId,
-        title,
-        author,
-        image: el.querySelector("img")?.getAttribute("src") ?? "",
-        label: el.querySelector(".mod-label")?.textContent?.trim() ?? "",
-        category,
-        url: `https://www.farming-simulator.com/mod.php?mod_id=${modId}&title=fs2025`,
-      };
-    })
-    .filter((e) => e.modId && e.title);
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");

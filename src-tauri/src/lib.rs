@@ -188,15 +188,54 @@ fn guess_category(lower_filename: &str, is_map: bool) -> String {
     }
     let f = lower_filename;
     let has = |words: &[&str]| words.iter().any(|w| f.contains(w));
-    if has(&["courseplay", "autodrive", "script", "hud", "helper", "guidance"]) {
+    if has(&[
+        "courseplay",
+        "autodrive",
+        "script",
+        "hud",
+        "helper",
+        "guidance",
+    ]) {
         "Scripts".into()
-    } else if has(&["barn", "shed", "silo", "workshop", "garage", "building", "stable", "greenhouse"]) {
+    } else if has(&[
+        "barn",
+        "shed",
+        "silo",
+        "workshop",
+        "garage",
+        "building",
+        "stable",
+        "greenhouse",
+    ]) {
         "Buildings".into()
-    } else if has(&["plow", "seeder", "trailer", "cultivator", "mower", "baler", "loader", "header", "tool", "plough", "harrow", "spreader"]) {
+    } else if has(&[
+        "plow",
+        "seeder",
+        "trailer",
+        "cultivator",
+        "mower",
+        "baler",
+        "loader",
+        "header",
+        "tool",
+        "plough",
+        "harrow",
+        "spreader",
+    ]) {
         "Tools".into()
     } else if has(&["pack"]) {
         "Packs".into()
-    } else if has(&["tractor", "harvester", "combine", "truck", "car", "loader", "excavator", "vario", "silverado"]) {
+    } else if has(&[
+        "tractor",
+        "harvester",
+        "combine",
+        "truck",
+        "car",
+        "loader",
+        "excavator",
+        "vario",
+        "silverado",
+    ]) {
         "Vehicles".into()
     } else {
         "Other".into()
@@ -464,11 +503,7 @@ fn set_enabled(app: AppHandle, filename: String, enabled: bool) -> Result<(), St
 }
 
 #[tauri::command]
-fn set_enabled_many(
-    app: AppHandle,
-    filenames: Vec<String>,
-    enabled: bool,
-) -> Result<(), String> {
+fn set_enabled_many(app: AppHandle, filenames: Vec<String>, enabled: bool) -> Result<(), String> {
     for f in &filenames {
         safe_filename(f)?;
     }
@@ -585,11 +620,7 @@ fn modhub_db(app: &AppHandle) -> Result<rusqlite::Connection, String> {
 }
 
 #[tauri::command]
-fn modhub_upsert(
-    app: AppHandle,
-    entries: Vec<ModHubEntry>,
-    cached_at: i64,
-) -> Result<(), String> {
+fn modhub_upsert(app: AppHandle, entries: Vec<ModHubEntry>, cached_at: i64) -> Result<(), String> {
     let conn = modhub_db(&app)?;
     for e in &entries {
         conn.execute(
@@ -627,7 +658,8 @@ fn modhub_all(app: AppHandle) -> Result<Vec<ModHubEntry>, String> {
             })
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 /// Fetch a ModHub CDN image (which blocks hot-linking without a Referer that the
@@ -716,11 +748,7 @@ async fn download_mod(app: AppHandle, mod_id: String) -> Result<String, String> 
         .as_str()
         .to_string();
 
-    let filename = zip_url
-        .rsplit('/')
-        .next()
-        .unwrap_or("mod.zip")
-        .to_string();
+    let filename = zip_url.rsplit('/').next().unwrap_or("mod.zip").to_string();
     safe_filename(&filename)?;
 
     let library = PathBuf::from(&cfg.library_dir);
@@ -916,6 +944,16 @@ fn sum_owned_prices(path: &Path, farm_id: &str) -> f64 {
     .unwrap_or(0.0)
 }
 
+/// Approximate in-game years elapsed: 12 periods (months) make a year.
+fn years_elapsed(current_day: f64, days_per_period: f64) -> f64 {
+    let dpp = if days_per_period > 0.0 {
+        days_per_period
+    } else {
+        1.0
+    };
+    current_day / (dpp * 12.0)
+}
+
 fn read_save(dir: &Path, slot: &str) -> Option<SaveInfo> {
     let base = dir.join(slot);
     let raw = fs::read_to_string(base.join("careerSavegame.xml")).ok()?;
@@ -947,7 +985,7 @@ fn read_save(dir: &Path, slot: &str) -> Option<SaveInfo> {
             .and_then(|s| s.parse::<f64>().ok())
             .filter(|d| *d > 0.0)
             .unwrap_or(1.0);
-        Some(current_day / (days_per_period * 12.0))
+        Some(years_elapsed(current_day, days_per_period))
     })();
 
     // Identify the player's farm to read its debt, then value its owned assets.
@@ -1404,9 +1442,7 @@ fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
-        Err(String::from_utf8_lossy(&out.stderr)
-            .trim()
-            .to_string())
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
     }
 }
 
@@ -1449,7 +1485,15 @@ fn sync_setup(app: AppHandle, name: String) -> Result<String, String> {
 
     let sync = sync_dir(&app)?;
     if sync.join(".git").exists() {
-        git(&sync, &["remote", "set-url", "origin", &format!("https://github.com/{slug}.git")])?;
+        git(
+            &sync,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                &format!("https://github.com/{slug}.git"),
+            ],
+        )?;
     } else {
         if sync.exists() {
             fs::remove_dir_all(&sync).ok();
@@ -1502,11 +1546,14 @@ fn sync_push(app: AppHandle) -> Result<String, String> {
     let conn = modhub_db(&app)?;
     let mut title_to_id: HashMap<String, String> = HashMap::new();
     if let Ok(mut stmt) = conn.prepare("SELECT title, mod_id FROM mods") {
-        if let Ok(rows) = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        }) {
+        if let Ok(rows) =
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        {
             for row in rows.flatten() {
-                let key = row.0.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
+                let key = row
+                    .0
+                    .to_lowercase()
+                    .replace(|c: char| !c.is_alphanumeric(), "");
                 title_to_id.insert(key, row.1);
             }
         }
@@ -1514,7 +1561,10 @@ fn sync_push(app: AppHandle) -> Result<String, String> {
     let manifest: Vec<ManifestEntry> = items
         .iter()
         .map(|i| {
-            let key = i.title.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
+            let key = i
+                .title
+                .to_lowercase()
+                .replace(|c: char| !c.is_alphanumeric(), "");
             ManifestEntry {
                 filename: i.filename.clone(),
                 title: i.title.clone(),
@@ -1537,9 +1587,7 @@ fn sync_push(app: AppHandle) -> Result<String, String> {
     if let Ok(rd) = fs::read_dir(&gdir) {
         for entry in rd.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with("savegame")
-                && entry.path().join("careerSavegame.xml").exists()
-            {
+            if name.starts_with("savegame") && entry.path().join("careerSavegame.xml").exists() {
                 zip_dir(&entry.path(), &saves_dir.join(format!("{name}.zip")))?;
                 save_count += 1;
             }
@@ -1597,7 +1645,8 @@ fn sync_pull(app: AppHandle) -> Result<PullResult, String> {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 if name.ends_with(".zip") {
                     // saved as "savegameN.zip" -> keep a distinct backup name
-                    let dest = backups.join(format!("{}_synced.zip", name.trim_end_matches(".zip")));
+                    let dest =
+                        backups.join(format!("{}_synced.zip", name.trim_end_matches(".zip")));
                     fs::copy(entry.path(), dest).map_err(|e| e.to_string())?;
                     saves_available += 1;
                 }
@@ -1699,21 +1748,10 @@ fn patch_savegame(
 
     let mut career = fs::read_to_string(&career_path).map_err(|e| e.to_string())?;
     if let Some(m) = money {
-        let mi = m.round() as i64;
-        let re = regex::Regex::new(r"<money>[^<]*</money>").map_err(|e| e.to_string())?;
-        career = re
-            .replace_all(&career, format!("<money>{mi}</money>").as_str())
-            .into_owned();
+        career = career_set_money(&career, m);
     }
     if let Some(n) = &name {
-        let re = regex::Regex::new(r"<savegameName>[^<]*</savegameName>")
-            .map_err(|e| e.to_string())?;
-        career = re
-            .replace(
-                &career,
-                format!("<savegameName>{}</savegameName>", xml_escape(n)).as_str(),
-            )
-            .into_owned();
+        career = career_set_name(&career, n);
     }
     fs::write(&career_path, career).map_err(|e| e.to_string())?;
 
@@ -1721,13 +1759,35 @@ fn patch_savegame(
     if let Some(m) = money {
         let farms_path = dir.join("farms.xml");
         if let Ok(farms) = fs::read_to_string(&farms_path) {
-            let re = regex::Regex::new(r#"(<farm\b[^>]*?\bmoney=")[^"]*""#)
-                .map_err(|e| e.to_string())?;
-            let patched = re.replace(&farms, format!("${{1}}{:.6}\"", m).as_str());
-            fs::write(&farms_path, patched.as_ref()).map_err(|e| e.to_string())?;
+            fs::write(&farms_path, farms_set_money(&farms, m)).map_err(|e| e.to_string())?;
         }
     }
     Ok(())
+}
+
+/// Replace every `<money>…</money>` in a careerSavegame.xml with a whole number.
+fn career_set_money(career: &str, money: f64) -> String {
+    let mi = money.round() as i64;
+    let re = regex::Regex::new(r"<money>[^<]*</money>").expect("valid regex");
+    re.replace_all(career, format!("<money>{mi}</money>").as_str())
+        .into_owned()
+}
+
+/// Replace `<savegameName>…</savegameName>` (XML-escaping the new name).
+fn career_set_name(career: &str, name: &str) -> String {
+    let re = regex::Regex::new(r"<savegameName>[^<]*</savegameName>").expect("valid regex");
+    re.replace(
+        career,
+        format!("<savegameName>{}</savegameName>", xml_escape(name)).as_str(),
+    )
+    .into_owned()
+}
+
+/// Set the money attribute on the first (player) `<farm …>` in farms.xml.
+fn farms_set_money(farms: &str, money: f64) -> String {
+    let re = regex::Regex::new(r#"(<farm\b[^>]*?\bmoney=")[^"]*""#).expect("valid regex");
+    re.replace(farms, format!("${{1}}{money:.6}\"").as_str())
+        .into_owned()
 }
 
 fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
@@ -1769,6 +1829,73 @@ fn clone_savegame(app: AppHandle, from_slot: String, to_slot: String) -> Result<
         fs::remove_dir_all(&dst).map_err(|e| e.to_string())?;
     }
     copy_dir(&src, &dst)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sets_money_in_career_and_farms() {
+        let career = "<statistics><money>100000</money></statistics><x><money>100000</money></x>";
+        // both <money> occurrences updated, whole number
+        assert_eq!(
+            career_set_money(career, 5000.0),
+            "<statistics><money>5000</money></statistics><x><money>5000</money></x>"
+        );
+        // below the $100k base-game floor works fine
+        assert!(career_set_money(career, 250.0).contains("<money>250</money>"));
+
+        let farms = r#"<farms><farm farmId="1" name="My farm" loan="0.0" money="100000.000000"><players/></farm></farms>"#;
+        let out = farms_set_money(farms, 5000.0);
+        assert!(out.contains(r#"money="5000.000000""#));
+        // farm attributes preserved
+        assert!(out.contains(r#"farmId="1""#) && out.contains(r#"name="My farm""#));
+    }
+
+    #[test]
+    fn renames_savegame_and_escapes() {
+        let career = "<savegameName>Old</savegameName>";
+        assert_eq!(
+            career_set_name(career, "New & <Fancy>"),
+            "<savegameName>New &amp; &lt;Fancy&gt;</savegameName>"
+        );
+    }
+
+    #[test]
+    fn years_from_calendar() {
+        // 6 in-game days at 1 day/period = 6 months = 0.5 years
+        assert!((years_elapsed(6.0, 1.0) - 0.5).abs() < 1e-9);
+        // 12 periods = 1 year
+        assert!((years_elapsed(24.0, 2.0) - 1.0).abs() < 1e-9);
+        // guards against divide-by-zero
+        assert!(years_elapsed(12.0, 0.0) > 0.0);
+    }
+
+    #[test]
+    fn seed_meta_classifies_known_mods() {
+        assert_eq!(
+            seed_meta("FS25_Courseplay.zip", false).requires,
+            vec!["fields", "roads"]
+        );
+        assert_eq!(
+            seed_meta("FS25_AutoDrive.zip", false).requires,
+            vec!["roads"]
+        );
+        // flat/empty maps provide nothing; ordinary maps provide the usual caps
+        assert!(seed_meta("FS25_Flat_Map.zip", true).provides.is_empty());
+        assert!(seed_meta("FS25_Farmlands.zip", true)
+            .provides
+            .contains(&"selling-points".to_string()));
+    }
+
+    #[test]
+    fn safe_filename_blocks_traversal() {
+        assert!(safe_filename("FS25_Mod.zip").is_ok());
+        assert!(safe_filename("../evil.zip").is_err());
+        assert!(safe_filename("a/b.zip").is_err());
+        assert!(safe_filename("").is_err());
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

@@ -101,3 +101,54 @@ fn parse_xml(raw: &str) -> Result<ModDesc, String> {
         is_map,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_xml;
+
+    #[test]
+    fn parses_mod_title_author_version() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<modDesc descVersion="98">
+  <author>Courseplay.devTeam</author>
+  <version>8.1.0.3</version>
+  <title><en>CoursePlay</en><de>Mein Mod</de></title>
+</modDesc>"#;
+        let d = parse_xml(xml).unwrap();
+        assert_eq!(d.title, "CoursePlay");
+        assert_eq!(d.author, "Courseplay.devTeam");
+        assert_eq!(d.version, "8.1.0.3");
+        assert!(!d.is_map);
+    }
+
+    #[test]
+    fn detects_maps() {
+        let xml = r#"<modDesc>
+  <title><en>Farmlands</en></title>
+  <maps><map id="x" className="Mission00" filename="a.lua"/></maps>
+</modDesc>"#;
+        let d = parse_xml(xml).unwrap();
+        assert_eq!(d.title, "Farmlands");
+        assert!(d.is_map);
+    }
+
+    #[test]
+    fn handles_cdata_and_missing_en() {
+        // author as CDATA, title with only a non-en language -> falls back to it
+        let xml = r#"<modDesc>
+  <author><![CDATA[AutoDrive Team]]></author>
+  <title><de>Nur Deutsch</de></title>
+</modDesc>"#;
+        let d = parse_xml(xml).unwrap();
+        assert_eq!(d.author, "AutoDrive Team");
+        assert_eq!(d.title, "Nur Deutsch");
+        assert!(!d.is_map);
+    }
+
+    #[test]
+    fn strips_xml_prolog_with_encoding() {
+        // a latin-1 declaration must not break parsing (prolog is stripped)
+        let xml = "<?xml version=\"1.0\" encoding=\"iso-8859-1\"?><modDesc><title><en>X</en></title></modDesc>";
+        assert_eq!(parse_xml(xml).unwrap().title, "X");
+    }
+}
