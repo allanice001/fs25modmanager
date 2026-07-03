@@ -168,6 +168,9 @@ export const api = {
     invoke<void>("patch_savegame", { slot, name, money }),
   cloneSavegame: (fromSlot: string, toSlot: string) =>
     invoke<void>("clone_savegame", { fromSlot, toSlot }),
+  getTemplates: () => invoke<Record<string, string>>("get_templates"),
+  setTemplate: (mapTitle: string, slot: string) =>
+    invoke<void>("set_template", { mapTitle, slot }),
   syncStatus: () => invoke<SyncStatus>("sync_status"),
   syncSetup: (name: string) => invoke<string>("sync_setup", { name }),
   syncPush: () => invoke<string>("sync_push"),

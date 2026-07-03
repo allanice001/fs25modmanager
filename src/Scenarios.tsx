@@ -103,6 +103,7 @@ export default function Scenarios({
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [saves, setSaves] = useState<SaveInfo[]>([]);
   const [slots, setSlots] = useState<SlotInfo[]>([]);
+  const [templates, setTemplates] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<Scenario | null>(null);
   const [generating, setGenerating] = useState(false);
   const [pickingSave, setPickingSave] = useState(false);
@@ -128,12 +129,14 @@ export default function Scenarios({
   // Re-read savegames + slots (they change outside the app, as you play).
   async function refreshSaves() {
     try {
-      const [sg, sl] = await Promise.all([
+      const [sg, sl, tpl] = await Promise.all([
         api.listSavegames(),
         api.listSlots(),
+        api.getTemplates(),
       ]);
       setSaves(sg);
       setSlots(sl);
+      setTemplates(tpl);
     } catch (e) {
       setError(String(e));
     }
@@ -413,8 +416,10 @@ export default function Scenarios({
                 />
                 <SeedButton
                   scenario={s}
+                  mapTitle={s.map ? titleOf(s.map) : ""}
                   saves={saves}
                   slots={slots}
+                  templateSlot={s.map ? templates[titleOf(s.map)] : undefined}
                   busy={busy}
                   onSeed={(from, to) => seedSave(s, from, to)}
                 />
@@ -471,44 +476,58 @@ function ApplyButton({
 
 function SeedButton({
   scenario,
+  mapTitle,
   saves,
   slots,
+  templateSlot,
   busy,
   onSeed,
 }: {
   scenario: Scenario;
+  mapTitle: string;
   saves: SaveInfo[];
   slots: SlotInfo[];
+  templateSlot?: string;
   busy: boolean;
   onSeed: (from: string, to: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [from, setFrom] = useState("");
+  // Saves on the scenario's map (clone can't change a save's map).
+  const sameMap = mapTitle
+    ? saves.filter((s) => norm(s.mapTitle) === norm(mapTitle))
+    : saves;
+  // Default the source to the designated template, else the first same-map save.
+  const [from, setFrom] = useState(
+    templateSlot && sameMap.some((s) => s.slot === templateSlot)
+      ? templateSlot
+      : (sameMap[0]?.slot ?? ""),
+  );
   const [to, setTo] = useState("");
   return (
     <div className="seed">
       <button
         className="btn ghost sm"
         disabled={busy}
-        title="Create a savegame for this scenario by cloning an existing save on the same map and stamping the scenario's money + name onto it."
+        title="Create a savegame for this scenario by cloning a save on the same map and stamping the scenario's money + name onto it. Mark a fresh save as the map's template (Saves tab) to auto-pick it."
         onClick={() => setOpen((o) => !o)}
       >
         💾 Seed save
       </button>
       {open && (
         <div className="seed-form">
-          {saves.length === 0 ? (
+          {sameMap.length === 0 ? (
             <span className="hint">
-              No savegames yet — start a game on this scenario's map in FS25
-              first, then Rescan.
+              No save on <b>{mapTitle || "this map"}</b> yet. Start a new game on
+              it in FS25, save immediately, then ⭐ mark it as this map's template
+              (Saves tab) — Seed will clone that.
             </span>
           ) : (
             <>
               <select value={from} onChange={(e) => setFrom(e.target.value)}>
-                <option value="">clone from save…</option>
-                {saves.map((s) => (
+                {sameMap.map((s) => (
                   <option key={s.slot} value={s.slot}>
-                    {s.slot}: {s.name} — {s.mapTitle}
+                    {s.slot === templateSlot ? "⭐ " : ""}
+                    {s.slot}: {s.name}
                   </option>
                 ))}
               </select>

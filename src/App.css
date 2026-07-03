@@ -448,6 +448,19 @@ main {
 .st-sep {
   opacity: 0.4;
 }
+.chip-star {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 20px;
+  padding: 2px 9px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.chip-star.on {
+  color: #ffd23f;
+  border-color: #ffd23f;
+}
 
 /* cards */
 .card {

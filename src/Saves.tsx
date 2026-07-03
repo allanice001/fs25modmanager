@@ -14,19 +14,37 @@ export default function Saves({
   const [saves, setSaves] = useState<SaveInfo[]>([]);
   const [slots, setSlots] = useState<SlotInfo[]>([]);
   const [backups, setBackups] = useState<BackupInfo[]>([]);
+  const [templates, setTemplates] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
   async function reload() {
     try {
-      const [s, sl, b] = await Promise.all([
+      const [s, sl, b, tpl] = await Promise.all([
         api.listSavegames(),
         api.listSlots(),
         api.listBackups(),
+        api.getTemplates(),
       ]);
       setSaves(s);
       setSlots(sl);
       setBackups(b);
+      setTemplates(tpl);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function toggleTemplate(s: SaveInfo) {
+    const isTpl = templates[s.mapTitle] === s.slot;
+    try {
+      await api.setTemplate(s.mapTitle, isTpl ? "" : s.slot);
+      setMsg(
+        isTpl
+          ? `Cleared template for ${s.mapTitle}`
+          : `${s.slot} is now the template for ${s.mapTitle}`,
+      );
+      await reload();
     } catch (e) {
       setError(String(e));
     }
@@ -149,6 +167,8 @@ export default function Saves({
           save={s}
           slots={slots}
           busy={busy}
+          isTemplate={templates[s.mapTitle] === s.slot}
+          onToggleTemplate={() => toggleTemplate(s)}
           onBackup={() => backup(s.slot)}
           onSetMoney={(v) => setMoney(s.slot, v)}
           onClone={(to) => clone(s.slot, to)}
@@ -187,6 +207,8 @@ function SaveCard({
   save: s,
   slots,
   busy,
+  isTemplate,
+  onToggleTemplate,
   onBackup,
   onSetMoney,
   onClone,
@@ -194,6 +216,8 @@ function SaveCard({
   save: SaveInfo;
   slots: SlotInfo[];
   busy: string | null;
+  isTemplate: boolean;
+  onToggleTemplate: () => void;
   onBackup: () => void;
   onSetMoney: (v: number) => void;
   onClone: (to: string) => void;
@@ -213,6 +237,19 @@ function SaveCard({
             <span className="title">{s.name}</span>
             {s.mapTitle && <span className="badge map">{s.mapTitle}</span>}
             <span className="muted">{s.slot}</span>
+            {s.mapTitle && (
+              <button
+                className={"chip-star" + (isTemplate ? " on" : "")}
+                title={
+                  isTemplate
+                    ? `Template for ${s.mapTitle} — Seed clones this. Click to unset.`
+                    : `Mark as the template for ${s.mapTitle} (Seed will clone it)`
+                }
+                onClick={onToggleTemplate}
+              >
+                {isTemplate ? "⭐ template" : "☆ template"}
+              </button>
+            )}
           </div>
           <div className="trackers">
             {s.money != null && (

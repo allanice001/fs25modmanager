@@ -1832,6 +1832,32 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Per-map "template" saves: which savegame slot to clone from when seeding a
+/// scenario on a given map. Keyed by map title.
+#[tauri::command]
+fn get_templates(app: AppHandle) -> Result<HashMap<String, String>, String> {
+    let path = config_dir(&app)?.join("templates.json");
+    if path.exists() {
+        let s = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&s).map_err(|e| e.to_string())
+    } else {
+        Ok(HashMap::new())
+    }
+}
+
+#[tauri::command]
+fn set_template(app: AppHandle, map_title: String, slot: String) -> Result<(), String> {
+    let mut t = get_templates(app.clone())?;
+    if slot.is_empty() {
+        t.remove(&map_title);
+    } else {
+        t.insert(map_title, slot);
+    }
+    let path = config_dir(&app)?.join("templates.json");
+    let s = serde_json::to_string_pretty(&t).map_err(|e| e.to_string())?;
+    fs::write(path, s).map_err(|e| e.to_string())
+}
+
 /// Copy one savegame slot's folder into another (overwriting the target).
 #[tauri::command]
 fn clone_savegame(app: AppHandle, from_slot: String, to_slot: String) -> Result<(), String> {
@@ -1963,6 +1989,8 @@ pub fn run() {
             list_slots,
             patch_savegame,
             clone_savegame,
+            get_templates,
+            set_template,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
