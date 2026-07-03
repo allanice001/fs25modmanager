@@ -72,3 +72,41 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+  # The code repo is private, so the Tauri updater (which fetches unauthenticated)
+  # can't read its release assets. Mirror the built installers + a URL-rewritten
+  # latest.json to a PUBLIC releases repo that the updater endpoint points at.
+  mirror:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download assets from the private draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p out
+          gh release download "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" --dir out --pattern '*'
+          ls -la out
+
+      - name: Point latest.json at the public releases repo
+        run: |
+          sed -i \
+            's#/${{ github.repository }}/releases/download/#/allanice001/fs25modmanager-releases/releases/download/#g' \
+            out/latest.json
+          echo "--- rewritten latest.json ---"; cat out/latest.json
+
+      - name: Publish to the public releases repo
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          if gh release view "$TAG" --repo allanice001/fs25modmanager-releases >/dev/null 2>&1; then
+            gh release upload "$TAG" out/* --repo allanice001/fs25modmanager-releases --clobber
+          else
+            gh release create "$TAG" out/* \
+              --repo allanice001/fs25modmanager-releases \
+              --title "FS25 Mod Manager $TAG" \
+              --notes "Auto-update artifacts for FS25 Mod Manager. Source code: https://github.com/allanice001/fs25modmanager" \
+              --latest
+          fi
