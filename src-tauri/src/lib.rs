@@ -1,0 +1,1818 @@
+//! FS25 Mod Manager backend.
+//!
+//! Model: a *library* folder holds every downloaded mod/map `.zip`. "Enabling"
+//! an item places a link (or copy) of it into the FS25 *mods* folder; disabling
+//! removes only that link, never the library original. A small on-disk catalog
+//! remembers per-item capability tags so we can flag mods that won't work on the
+//! currently active map (e.g. Courseplay on a flat, field-less map).
+
+mod moddesc;
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Manager};
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Config {
+    /// Folder that holds all downloaded mod/map zips.
+    library_dir: String,
+    /// The FS25 `mods` folder that the game reads.
+    mods_dir: String,
+    /// "symlink" | "hardlink" | "copy".
+    link_mode: String,
+    /// Filename of the map the user is currently playing, if any.
+    active_map: Option<String>,
+    /// GitHub repo (owner/name) used for backup/sync, if configured.
+    #[serde(default)]
+    sync_repo: Option<String>,
+}
+
+fn default_mods_dir() -> PathBuf {
+    if cfg!(target_os = "windows") {
+        dirs::document_dir()
+            .unwrap_or_default()
+            .join("My Games")
+            .join("FarmingSimulator2025")
+            .join("mods")
+    } else if cfg!(target_os = "macos") {
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join("Library/Application Support/FarmingSimulator2025/mods")
+    } else {
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(".local/share/FarmingSimulator2025/mods")
+    }
+}
+
+fn default_link_mode() -> String {
+    // Hardlinks everywhere: FS25's engine does NOT follow symlinks in the mods
+    // folder (it fails to read the zip), and on Windows symlinks also need admin.
+    // Hardlinks appear to the game as real files, cost no extra disk, and are
+    // instant even for huge maps. (Same-volume only; place() falls back to copy.)
+    "hardlink".into()
+}
+
+fn default_config() -> Config {
+    let library = dirs::document_dir()
+        .unwrap_or_default()
+        .join("FS25ModLibrary");
+    Config {
+        library_dir: library.to_string_lossy().into_owned(),
+        mods_dir: default_mods_dir().to_string_lossy().into_owned(),
+        link_mode: default_link_mode(),
+        active_map: None,
+        sync_repo: None,
+    }
+}
+
+fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+fn load_config(app: &AppHandle) -> Result<Config, String> {
+    let path = config_dir(app)?.join("config.json");
+    if path.exists() {
+        let s = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&s).map_err(|e| e.to_string())
+    } else {
+        let cfg = default_config();
+        write_config(app, &cfg)?;
+        Ok(cfg)
+    }
+}
+
+fn write_config(app: &AppHandle, cfg: &Config) -> Result<(), String> {
+    let path = config_dir(app)?.join("config.json");
+    let s = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    fs::write(path, s).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Catalog: per-item capability metadata, keyed by filename.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+struct ItemMeta {
+    /// "map" | "mod" — overrides the auto-detected kind.
+    #[serde(default)]
+    kind: String,
+    /// Library category (e.g. "Vehicles", "Tools", "Scripts", "Map").
+    #[serde(default)]
+    category: String,
+    /// Free-form user tags.
+    #[serde(default)]
+    tags: Vec<String>,
+    /// Capabilities a *mod* needs from the active map (e.g. "fields").
+    #[serde(default)]
+    requires: Vec<String>,
+    /// Capabilities a *map* provides (e.g. "fields", "selling-points").
+    #[serde(default)]
+    provides: Vec<String>,
+    #[serde(default)]
+    notes: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct Catalog {
+    items: HashMap<String, ItemMeta>,
+}
+
+fn load_catalog(app: &AppHandle) -> Result<Catalog, String> {
+    let path = config_dir(app)?.join("catalog.json");
+    if path.exists() {
+        let s = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&s).map_err(|e| e.to_string())
+    } else {
+        Ok(Catalog::default())
+    }
+}
+
+fn write_catalog(app: &AppHandle, cat: &Catalog) -> Result<(), String> {
+    let path = config_dir(app)?.join("catalog.json");
+    let s = serde_json::to_string_pretty(cat).map_err(|e| e.to_string())?;
+    fs::write(path, s).map_err(|e| e.to_string())
+}
+
+/// Seed sensible defaults the first time we see a mod, so compatibility works
+/// out of the box for well-known mods without the user configuring anything.
+fn seed_meta(filename: &str, is_map: bool) -> ItemMeta {
+    let f = filename.to_lowercase();
+    let (requires, provides) = if is_map {
+        // Flat / empty maps deliberately provide nothing; ordinary maps provide
+        // the usual capabilities. Both are user-editable afterwards.
+        let provides = if f.contains("flat") || f.contains("empty") {
+            vec![]
+        } else {
+            vec![
+                "fields".to_string(),
+                "roads".to_string(),
+                "selling-points".to_string(),
+            ]
+        };
+        (vec![], provides)
+    } else {
+        let requires = if f.contains("courseplay") {
+            vec!["fields".to_string(), "roads".to_string()]
+        } else if f.contains("autodrive") {
+            vec!["roads".to_string()]
+        } else {
+            vec![]
+        };
+        (requires, vec![])
+    };
+    ItemMeta {
+        kind: if is_map { "map".into() } else { "mod".into() },
+        category: guess_category(&f, is_map),
+        tags: vec![],
+        requires,
+        provides,
+        notes: String::new(),
+    }
+}
+
+/// Rough first-guess category from the filename; user-editable afterwards.
+fn guess_category(lower_filename: &str, is_map: bool) -> String {
+    if is_map {
+        return "Map".into();
+    }
+    let f = lower_filename;
+    let has = |words: &[&str]| words.iter().any(|w| f.contains(w));
+    if has(&["courseplay", "autodrive", "script", "hud", "helper", "guidance"]) {
+        "Scripts".into()
+    } else if has(&["barn", "shed", "silo", "workshop", "garage", "building", "stable", "greenhouse"]) {
+        "Buildings".into()
+    } else if has(&["plow", "seeder", "trailer", "cultivator", "mower", "baler", "loader", "header", "tool", "plough", "harrow", "spreader"]) {
+        "Tools".into()
+    } else if has(&["pack"]) {
+        "Packs".into()
+    } else if has(&["tractor", "harvester", "combine", "truck", "car", "loader", "excavator", "vario", "silverado"]) {
+        "Vehicles".into()
+    } else {
+        "Other".into()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Item listing sent to the frontend.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModItem {
+    filename: String,
+    title: String,
+    author: String,
+    version: String,
+    kind: String,
+    category: String,
+    enabled: bool,
+    is_active_map: bool,
+    tags: Vec<String>,
+    requires: Vec<String>,
+    provides: Vec<String>,
+    notes: String,
+    compatible: bool,
+    incompat_reasons: Vec<String>,
+    size: u64,
+    /// Set if we couldn't read the archive's modDesc.xml.
+    error: Option<String>,
+}
+
+fn is_zip(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("zip"))
+        .unwrap_or(false)
+}
+
+/// Reject anything that isn't a bare filename to avoid path traversal.
+fn safe_filename(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err(format!("unsafe filename: {name}"));
+    }
+    Ok(())
+}
+
+fn scan(app: &AppHandle) -> Result<Vec<ModItem>, String> {
+    let cfg = load_config(app)?;
+    let mut catalog = load_catalog(app)?;
+    let library = PathBuf::from(&cfg.library_dir);
+    let mods = PathBuf::from(&cfg.mods_dir);
+
+    // Make sure the library exists so a first run doesn't error out.
+    fs::create_dir_all(&library).ok();
+
+    let mut catalog_dirty = false;
+    let mut raw: Vec<(String, moddesc::ModDesc, Option<String>, u64)> = Vec::new();
+
+    let entries = fs::read_dir(&library).map_err(|e| e.to_string())?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() || !is_zip(&path) {
+            continue;
+        }
+        let filename = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        let (desc, error) = match moddesc::parse(&path) {
+            Ok(d) => (d, None),
+            Err(e) => (moddesc::ModDesc::default(), Some(e)),
+        };
+
+        // Seed catalog on first sight; afterwards the catalog is source of truth.
+        if !catalog.items.contains_key(&filename) {
+            catalog
+                .items
+                .insert(filename.clone(), seed_meta(&filename, desc.is_map));
+            catalog_dirty = true;
+        }
+        raw.push((filename, desc, error, size));
+    }
+
+    if catalog_dirty {
+        write_catalog(app, &catalog)?;
+    }
+
+    // Resolve the active map's provided capabilities up front.
+    let active_provides: Vec<String> = cfg
+        .active_map
+        .as_ref()
+        .and_then(|m| catalog.items.get(m))
+        .map(|meta| meta.provides.clone())
+        .unwrap_or_default();
+    let have_active_map = cfg.active_map.is_some();
+
+    let mut items: Vec<ModItem> = raw
+        .into_iter()
+        .map(|(filename, desc, error, size)| {
+            let meta = catalog.items.get(&filename).cloned().unwrap_or_default();
+            let kind = if meta.kind.is_empty() {
+                if desc.is_map {
+                    "map".into()
+                } else {
+                    "mod".into()
+                }
+            } else {
+                meta.kind.clone()
+            };
+            let category = if meta.category.is_empty() {
+                guess_category(&filename.to_lowercase(), kind == "map")
+            } else {
+                meta.category.clone()
+            };
+            let enabled = mods.join(&filename).symlink_metadata().is_ok();
+            let is_active_map = cfg.active_map.as_deref() == Some(filename.as_str());
+
+            // A mod is incompatible if it needs a capability the active map
+            // doesn't provide. Maps themselves are always "compatible".
+            let mut incompat_reasons = Vec::new();
+            if kind == "mod" && have_active_map {
+                for req in &meta.requires {
+                    if !active_provides.contains(req) {
+                        incompat_reasons.push(req.clone());
+                    }
+                }
+            }
+            let title = if desc.title.is_empty() {
+                filename.trim_end_matches(".zip").to_string()
+            } else {
+                desc.title.clone()
+            };
+
+            ModItem {
+                filename,
+                title,
+                author: desc.author,
+                version: desc.version,
+                kind,
+                category,
+                enabled,
+                is_active_map,
+                tags: meta.tags,
+                requires: meta.requires,
+                provides: meta.provides,
+                notes: meta.notes,
+                compatible: incompat_reasons.is_empty(),
+                incompat_reasons,
+                size,
+                error,
+            }
+        })
+        .collect();
+
+    items.sort_by(|a, b| {
+        a.kind
+            .cmp(&b.kind)
+            .then(a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+    });
+    Ok(items)
+}
+
+// ---------------------------------------------------------------------------
+// Enable / disable: place or remove the link in the mods folder.
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+fn make_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(src, dst)
+}
+
+#[cfg(windows)]
+fn make_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(src, dst)
+}
+
+fn place(src: &Path, dst: &Path, mode: &str) -> Result<(), String> {
+    let result = match mode {
+        "copy" => fs::copy(src, dst).map(|_| ()),
+        "hardlink" => fs::hard_link(src, dst),
+        _ => make_symlink(src, dst),
+    };
+    // Hardlinks fail across volumes; symlinks can fail without privilege on
+    // Windows. Fall back to a plain copy so enabling never silently no-ops.
+    result
+        .or_else(|_| fs::copy(src, dst).map(|_| ()))
+        .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn get_config(app: AppHandle) -> Result<Config, String> {
+    load_config(&app)
+}
+
+/// Launch Farming Simulator 25 via Steam (appid 2300320). Uses the OS URL
+/// handler directly — the opener plugin blocks non-web schemes like steam://.
+#[tauri::command]
+fn launch_game() -> Result<(), String> {
+    let url = "steam://run/2300320";
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", "", url]);
+        c
+    };
+    #[cfg(target_os = "linux")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    cmd.spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn save_config(app: AppHandle, config: Config) -> Result<(), String> {
+    write_config(&app, &config)
+}
+
+#[tauri::command]
+fn list_items(app: AppHandle) -> Result<Vec<ModItem>, String> {
+    scan(&app)
+}
+
+/// Enable/disable a single item against an already-loaded config.
+fn apply_enabled(cfg: &Config, filename: &str, enabled: bool) -> Result<(), String> {
+    let src = PathBuf::from(&cfg.library_dir).join(filename);
+    let dst = PathBuf::from(&cfg.mods_dir).join(filename);
+
+    if enabled {
+        if !src.exists() {
+            return Err(format!("{filename} is not in the library folder"));
+        }
+        fs::create_dir_all(&cfg.mods_dir).map_err(|e| e.to_string())?;
+        if dst.symlink_metadata().is_ok() {
+            return Ok(()); // already present
+        }
+        place(&src, &dst, &cfg.link_mode)?;
+    } else if dst.symlink_metadata().is_ok() {
+        // Removes the link/copy in the mods folder only; the library keeps its
+        // own copy (true for symlink, hardlink and copy modes alike).
+        fs::remove_file(&dst).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_enabled(app: AppHandle, filename: String, enabled: bool) -> Result<(), String> {
+    safe_filename(&filename)?;
+    let cfg = load_config(&app)?;
+    apply_enabled(&cfg, &filename, enabled)
+}
+
+#[tauri::command]
+fn set_enabled_many(
+    app: AppHandle,
+    filenames: Vec<String>,
+    enabled: bool,
+) -> Result<(), String> {
+    for f in &filenames {
+        safe_filename(f)?;
+    }
+    let cfg = load_config(&app)?;
+    for f in &filenames {
+        apply_enabled(&cfg, f, enabled)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_active_map(app: AppHandle, filename: Option<String>) -> Result<(), String> {
+    if let Some(ref f) = filename {
+        safe_filename(f)?;
+    }
+    let mut cfg = load_config(&app)?;
+    cfg.active_map = filename;
+    write_config(&app, &cfg)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportResult {
+    imported: usize,
+    skipped: usize,
+}
+
+/// Adopt mods the user dropped straight into the game's mods folder: move each
+/// real (non-symlink) zip into the library, then re-link it back so it stays
+/// active in-game. Zips already present in the library are left alone.
+#[tauri::command]
+fn import_from_mods(app: AppHandle) -> Result<ImportResult, String> {
+    let cfg = load_config(&app)?;
+    let mods = PathBuf::from(&cfg.mods_dir);
+    let library = PathBuf::from(&cfg.library_dir);
+    fs::create_dir_all(&library).map_err(|e| e.to_string())?;
+
+    let mut imported = 0;
+    let mut skipped = 0;
+    let entries = match fs::read_dir(&mods) {
+        Ok(e) => e,
+        Err(_) => return Ok(ImportResult { imported, skipped }),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // DirEntry::metadata does not follow symlinks, so this skips links we
+        // already manage and only adopts real files.
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if meta.file_type().is_symlink() || !meta.is_file() || !is_zip(&path) {
+            continue;
+        }
+        let filename = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        let dest = library.join(&filename);
+        if dest.exists() {
+            skipped += 1;
+            continue;
+        }
+        // Move into the library; fall back to copy+delete across volumes.
+        if fs::rename(&path, &dest).is_err() {
+            fs::copy(&path, &dest).map_err(|e| e.to_string())?;
+            fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+        // Re-link so the mod stays enabled in-game.
+        apply_enabled(&cfg, &filename, true)?;
+        imported += 1;
+    }
+    Ok(ImportResult { imported, skipped })
+}
+
+// ---------------------------------------------------------------------------
+// ModHub: a SQLite catalog of scraped entries + a direct downloader.
+// ---------------------------------------------------------------------------
+
+const MODHUB_UA: &str =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ModHubEntry {
+    mod_id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    author: String,
+    #[serde(default)]
+    image: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    category: String,
+    #[serde(default)]
+    label: String,
+}
+
+fn modhub_db(app: &AppHandle) -> Result<rusqlite::Connection, String> {
+    let path = config_dir(app)?.join("modhub.db");
+    let conn = rusqlite::Connection::open(path).map_err(|e| e.to_string())?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS mods (
+            mod_id TEXT PRIMARY KEY,
+            title TEXT, author TEXT, image TEXT, url TEXT,
+            category TEXT, label TEXT, cached_at INTEGER
+         )",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(conn)
+}
+
+#[tauri::command]
+fn modhub_upsert(
+    app: AppHandle,
+    entries: Vec<ModHubEntry>,
+    cached_at: i64,
+) -> Result<(), String> {
+    let conn = modhub_db(&app)?;
+    for e in &entries {
+        conn.execute(
+            "INSERT INTO mods (mod_id,title,author,image,url,category,label,cached_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+             ON CONFLICT(mod_id) DO UPDATE SET
+                title=?2, author=?3, image=?4, url=?5,
+                category=CASE WHEN ?6<>'' THEN ?6 ELSE category END,
+                label=?7, cached_at=?8",
+            rusqlite::params![
+                e.mod_id, e.title, e.author, e.image, e.url, e.category, e.label, cached_at
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn modhub_all(app: AppHandle) -> Result<Vec<ModHubEntry>, String> {
+    let conn = modhub_db(&app)?;
+    let mut stmt = conn
+        .prepare("SELECT mod_id,title,author,image,url,category,label FROM mods ORDER BY title")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(ModHubEntry {
+                mod_id: r.get(0)?,
+                title: r.get(1)?,
+                author: r.get(2)?,
+                image: r.get(3)?,
+                url: r.get(4)?,
+                category: r.get(5)?,
+                label: r.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+/// Fetch a ModHub CDN image (which blocks hot-linking without a Referer that the
+/// webview's <img> can't send) and return it as a data URI, cached on disk.
+#[tauri::command]
+async fn fetch_image(app: AppHandle, url: String) -> Result<String, String> {
+    if !url.starts_with("https://") || !url.contains("giants-software.com") {
+        return Err("unsupported image host".into());
+    }
+    let key: String = url
+        .rsplit('/')
+        .take(2)
+        .collect::<Vec<_>>()
+        .join("_")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '_')
+        .collect();
+    let cache = config_dir(&app)?.join("imgcache");
+    fs::create_dir_all(&cache).ok();
+    let cachefile = cache.join(format!("{key}.datauri"));
+    if let Ok(s) = fs::read_to_string(&cachefile) {
+        return Ok(s);
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent(MODHUB_UA)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(&url)
+        .header("Referer", "https://www.farming-simulator.com/")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?;
+    let ctype = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("image/jpeg")
+        .to_string();
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    use base64::Engine;
+    let data_uri = format!(
+        "data:{ctype};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    );
+    let _ = fs::write(&cachefile, &data_uri);
+    Ok(data_uri)
+}
+
+/// Download a mod straight from ModHub into the library: fetch its page, find
+/// the CDN zip link, and download it with the page as Referer (the CDN blocks
+/// hot-linking without it). Returns the saved filename.
+#[tauri::command]
+async fn download_mod(app: AppHandle, mod_id: String) -> Result<String, String> {
+    if !mod_id.chars().all(|c| c.is_ascii_digit()) {
+        return Err("invalid mod id".into());
+    }
+    let cfg = load_config(&app)?;
+    let detail_url =
+        format!("https://www.farming-simulator.com/mod.php?mod_id={mod_id}&title=fs2025");
+
+    let client = reqwest::Client::builder()
+        .user_agent(MODHUB_UA)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let html = client
+        .get(&detail_url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .text()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let re = regex::Regex::new(
+        r#"https://cdn\d+\.giants-software\.com/modHub/storage/\d+/[^"'\s]+\.zip"#,
+    )
+    .map_err(|e| e.to_string())?;
+    let zip_url = re
+        .find(&html)
+        .ok_or("no download link found on the mod page")?
+        .as_str()
+        .to_string();
+
+    let filename = zip_url
+        .rsplit('/')
+        .next()
+        .unwrap_or("mod.zip")
+        .to_string();
+    safe_filename(&filename)?;
+
+    let library = PathBuf::from(&cfg.library_dir);
+    fs::create_dir_all(&library).map_err(|e| e.to_string())?;
+    // Download to a temp file first so a partial/failed download never leaves a
+    // corrupt zip in the library.
+    let dest = library.join(&filename);
+    let tmp = library.join(format!("{filename}.part"));
+
+    let resp = client
+        .get(&zip_url)
+        .header("Referer", &detail_url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?;
+
+    // Stream the response straight to disk instead of buffering it all in RAM,
+    // so a 700 MB map won't blow up memory.
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+    let mut file = tokio::fs::File::create(&tmp)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+    }
+    file.flush().await.map_err(|e| e.to_string())?;
+    drop(file);
+    fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
+    Ok(filename)
+}
+
+#[tauri::command]
+fn update_meta(app: AppHandle, filename: String, meta: ItemMeta) -> Result<(), String> {
+    safe_filename(&filename)?;
+    let mut catalog = load_catalog(&app)?;
+    catalog.items.insert(filename, meta);
+    write_catalog(&app, &catalog)
+}
+
+// ---------------------------------------------------------------------------
+// Scenarios: a named challenge = a map + a starting kit of mods + a money goal,
+// optionally tracked against a real savegame.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Scenario {
+    id: String,
+    name: String,
+    #[serde(default)]
+    description: String,
+    /// Preset this scenario came from (e.g. "realistic"), informational.
+    #[serde(default)]
+    mode: String,
+    /// Rule ids evaluated live against the linked savegame.
+    #[serde(default)]
+    rules: Vec<String>,
+    /// Library filename of the map this scenario is played on.
+    #[serde(default)]
+    map: Option<String>,
+    /// Library filenames of mods the scenario starts with.
+    #[serde(default)]
+    required_mods: Vec<String>,
+    /// Free-text starting equipment/setup notes.
+    #[serde(default)]
+    starting_kit: String,
+    #[serde(default)]
+    start_money: Option<f64>,
+    #[serde(default)]
+    goal_money: Option<f64>,
+    /// Deadline to reach the goal, in in-game years.
+    #[serde(default)]
+    deadline_years: Option<f64>,
+    /// Savegame folder name (e.g. "savegame1") to track progress against.
+    #[serde(default)]
+    savegame_slot: Option<String>,
+}
+
+fn load_scenarios(app: &AppHandle) -> Result<Vec<Scenario>, String> {
+    let path = config_dir(app)?.join("scenarios.json");
+    if path.exists() {
+        let s = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&s).map_err(|e| e.to_string())
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+fn write_scenarios(app: &AppHandle, list: &[Scenario]) -> Result<(), String> {
+    let path = config_dir(app)?.join("scenarios.json");
+    let s = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
+    fs::write(path, s).map_err(|e| e.to_string())
+}
+
+/// FS25 keeps savegames next to the mods folder, so the game user dir is the
+/// mods folder's parent.
+fn game_dir(cfg: &Config) -> PathBuf {
+    PathBuf::from(&cfg.mods_dir)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(&cfg.mods_dir))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveInfo {
+    slot: String,
+    name: String,
+    map_title: String,
+    money: Option<f64>,
+    /// Outstanding loan / line-of-credit debt from farms.xml.
+    loan: Option<f64>,
+    /// Purchase-price value of owned vehicles + placeables (approximate; the
+    /// game's own figure uses depreciated sell values and includes land).
+    asset_value: Option<f64>,
+    play_time_hours: Option<f64>,
+    /// Approximate in-game years elapsed (12 periods = 1 year).
+    years_elapsed: Option<f64>,
+    /// modName of every mod this save depends on (from careerSavegame.xml).
+    mods: Vec<String>,
+}
+
+/// roxmltree errors on a leading UTF-8 BOM, which FS25's save XML files carry.
+fn strip_bom(s: &str) -> &str {
+    s.strip_prefix('\u{feff}').unwrap_or(s)
+}
+
+/// Pull the first `<tag>` descendant's trimmed text from an XML document.
+fn xml_text(doc: &roxmltree::Document, tag: &str) -> Option<String> {
+    doc.root_element()
+        .descendants()
+        .find(|n| n.has_tag_name(tag))
+        .and_then(|n| n.text())
+        .map(|s| s.trim().to_string())
+}
+
+/// Find the player's farm in farms.xml — the farm whose money matches the
+/// career money, falling back to the first farm. Returns (loan, farmId).
+fn read_player_farm(path: &Path, career_money: Option<f64>) -> Option<(Option<f64>, String)> {
+    let s = fs::read_to_string(path).ok()?;
+    let doc = roxmltree::Document::parse(strip_bom(&s)).ok()?;
+    let farms: Vec<_> = doc
+        .root_element()
+        .descendants()
+        .filter(|n| n.has_tag_name("farm") && n.attribute("farmId").is_some())
+        .collect();
+    let farm = career_money
+        .and_then(|m| {
+            farms
+                .iter()
+                .find(|f| {
+                    f.attribute("money")
+                        .and_then(|v| v.parse::<f64>().ok())
+                        .map(|fm| (fm - m).abs() < 1.0)
+                        .unwrap_or(false)
+                })
+                .copied()
+        })
+        .or_else(|| farms.first().copied())?;
+    let loan = farm.attribute("loan").and_then(|v| v.parse::<f64>().ok());
+    Some((loan, farm.attribute("farmId")?.to_string()))
+}
+
+/// Sum the `price` of every OWNED vehicle/placeable belonging to `farm_id`.
+fn sum_owned_prices(path: &Path, farm_id: &str) -> f64 {
+    (|| -> Option<f64> {
+        let s = fs::read_to_string(path).ok()?;
+        let doc = roxmltree::Document::parse(strip_bom(&s)).ok()?;
+        let mut total = 0.0;
+        for n in doc.root_element().descendants() {
+            // Only value top-level assets, never nested child nodes.
+            if !(n.has_tag_name("vehicle") || n.has_tag_name("placeable")) {
+                continue;
+            }
+            if n.attribute("farmId") != Some(farm_id) {
+                continue;
+            }
+            // Leased vehicles aren't owned assets.
+            if matches!(n.attribute("propertyState"), Some(s) if s != "OWNED") {
+                continue;
+            }
+            if let Some(price) = n.attribute("price").and_then(|v| v.parse::<f64>().ok()) {
+                total += price;
+            }
+        }
+        Some(total)
+    })()
+    .unwrap_or(0.0)
+}
+
+fn read_save(dir: &Path, slot: &str) -> Option<SaveInfo> {
+    let base = dir.join(slot);
+    let raw = fs::read_to_string(base.join("careerSavegame.xml")).ok()?;
+    let doc = roxmltree::Document::parse(strip_bom(&raw)).ok()?;
+    let text = |tag: &str| xml_text(&doc, tag);
+
+    let money = text("money").and_then(|s| s.parse::<f64>().ok());
+    let play_time_hours = text("playTime")
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|min| min / 60.0);
+
+    // The mods this save depends on, e.g. <mod modName="FS25_Courseplay" .../>.
+    let mods: Vec<String> = doc
+        .root_element()
+        .descendants()
+        .filter(|n| n.has_tag_name("mod"))
+        .filter_map(|n| n.attribute("modName").map(str::to_string))
+        .collect();
+
+    // In-game calendar lives in environment.xml: currentDay counts elapsed
+    // in-game days, daysPerPeriod is how many days a period (month) lasts, and
+    // 12 periods make a year. The parsed Document borrows the file string, so
+    // keep both alive together inside this closure and return an owned number.
+    let years_elapsed = (|| {
+        let env = fs::read_to_string(base.join("environment.xml")).ok()?;
+        let env_doc = roxmltree::Document::parse(strip_bom(&env)).ok()?;
+        let current_day = xml_text(&env_doc, "currentDay")?.parse::<f64>().ok()?;
+        let days_per_period = xml_text(&env_doc, "daysPerPeriod")
+            .and_then(|s| s.parse::<f64>().ok())
+            .filter(|d| *d > 0.0)
+            .unwrap_or(1.0);
+        Some(current_day / (days_per_period * 12.0))
+    })();
+
+    // Identify the player's farm to read its debt, then value its owned assets.
+    let (loan, farm_id) = match read_player_farm(&base.join("farms.xml"), money) {
+        Some((l, id)) => (l, Some(id)),
+        None => (None, None),
+    };
+    let asset_value = farm_id.as_ref().map(|fid| {
+        sum_owned_prices(&base.join("vehicles.xml"), fid)
+            + sum_owned_prices(&base.join("placeables.xml"), fid)
+    });
+
+    Some(SaveInfo {
+        slot: slot.to_string(),
+        name: text("savegameName").unwrap_or_else(|| slot.to_string()),
+        map_title: text("mapTitle").unwrap_or_default(),
+        money,
+        loan,
+        asset_value,
+        play_time_hours,
+        years_elapsed,
+        mods,
+    })
+}
+
+#[tauri::command]
+fn list_savegames(app: AppHandle) -> Result<Vec<SaveInfo>, String> {
+    let cfg = load_config(&app)?;
+    let dir = game_dir(&cfg);
+    let mut saves: Vec<SaveInfo> = Vec::new();
+    if let Ok(entries) = fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // savegameN folders only, and only those with a career file.
+            if name.starts_with("savegame") && entry.path().is_dir() {
+                if let Some(info) = read_save(&dir, &name) {
+                    saves.push(info);
+                }
+            }
+        }
+    }
+    // Natural-ish ordering by trailing number.
+    saves.sort_by_key(|s| {
+        s.slot
+            .trim_start_matches("savegame")
+            .parse::<u32>()
+            .unwrap_or(u32::MAX)
+    });
+    Ok(saves)
+}
+
+#[tauri::command]
+fn list_scenarios(app: AppHandle) -> Result<Vec<Scenario>, String> {
+    load_scenarios(&app)
+}
+
+#[tauri::command]
+fn save_scenario(app: AppHandle, scenario: Scenario) -> Result<(), String> {
+    let mut list = load_scenarios(&app)?;
+    match list.iter_mut().find(|s| s.id == scenario.id) {
+        Some(existing) => *existing = scenario,
+        None => list.push(scenario),
+    }
+    write_scenarios(&app, &list)
+}
+
+#[tauri::command]
+fn delete_scenario(app: AppHandle, id: String) -> Result<(), String> {
+    let mut list = load_scenarios(&app)?;
+    list.retain(|s| s.id != id);
+    write_scenarios(&app, &list)
+}
+
+/// For a clean-slate apply: remove a mods-folder entry, first adopting any
+/// unmanaged real file (e.g. an auto-downloaded dependency) into the library so
+/// it isn't lost — managed links and already-backed-up files are just removed.
+fn clean_from_mods(cfg: &Config, name: &str) -> Result<(), String> {
+    let mods_path = PathBuf::from(&cfg.mods_dir).join(name);
+    let lib_path = PathBuf::from(&cfg.library_dir).join(name);
+    let meta = match mods_path.symlink_metadata() {
+        Ok(m) => m,
+        Err(_) => return Ok(()),
+    };
+    if meta.file_type().is_symlink() || lib_path.exists() {
+        fs::remove_file(&mods_path).map_err(|e| e.to_string())?;
+    } else {
+        fs::create_dir_all(&cfg.library_dir).ok();
+        if fs::rename(&mods_path, &lib_path).is_err() {
+            fs::copy(&mods_path, &lib_path).map_err(|e| e.to_string())?;
+            fs::remove_file(&mods_path).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Configure the game to match a scenario: enable its map + required mods, set
+/// the active map, and (if `exclusive`) disable everything else in the mods
+/// folder for a clean slate.
+#[tauri::command]
+fn apply_scenario(app: AppHandle, id: String, exclusive: bool) -> Result<(), String> {
+    let list = load_scenarios(&app)?;
+    let scenario = list
+        .into_iter()
+        .find(|s| s.id == id)
+        .ok_or("scenario not found")?;
+
+    let mut cfg = load_config(&app)?;
+
+    // Everything the scenario wants active.
+    let mut keep: Vec<String> = scenario.required_mods.clone();
+    if let Some(m) = &scenario.map {
+        keep.push(m.clone());
+    }
+    for f in &keep {
+        safe_filename(f)?;
+    }
+
+    if exclusive {
+        // Force-clean: remove every mods-folder entry not in the scenario,
+        // including mods another game auto-downloaded. Unmanaged real files are
+        // adopted into the library first so nothing is lost.
+        if let Ok(entries) = fs::read_dir(&cfg.mods_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if is_zip(&entry.path()) && !keep.contains(&name) {
+                    clean_from_mods(&cfg, &name)?;
+                }
+            }
+        }
+    }
+
+    for f in &keep {
+        apply_enabled(&cfg, f, true)?;
+    }
+
+    cfg.active_map = scenario.map.clone();
+    write_config(&app, &cfg)
+}
+
+// ---------------------------------------------------------------------------
+// Health check: surface mods that failed to load and stray symlinks.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HealthReport {
+    /// Mods the game failed to load last run (from log.txt).
+    failed_mods: Vec<String>,
+    /// Symlinks in the mods folder — FS25 can't read these.
+    symlinks: Vec<String>,
+    /// Files in the mods folder that aren't in the library (unmanaged).
+    orphans: Vec<String>,
+    /// Count of healthy entries (real files / hardlinks).
+    healthy: usize,
+    log_found: bool,
+}
+
+#[tauri::command]
+fn health_check(app: AppHandle) -> Result<HealthReport, String> {
+    let cfg = load_config(&app)?;
+    let mods = PathBuf::from(&cfg.mods_dir);
+    let library = PathBuf::from(&cfg.library_dir);
+
+    // Mods that failed to load, from the game log.
+    let log_path = game_dir(&cfg).join("log.txt");
+    let log_found = log_path.exists();
+    let mut failed_mods = Vec::new();
+    if let Ok(log) = fs::read_to_string(&log_path) {
+        if let Ok(re) =
+            regex::Regex::new(r"Failed to open xml file '.*/mods/([^/']+)/modDesc\.xml'")
+        {
+            for cap in re.captures_iter(&log) {
+                let name = cap[1].to_string();
+                if !failed_mods.contains(&name) {
+                    failed_mods.push(name);
+                }
+            }
+        }
+    }
+
+    let lib_files: std::collections::HashSet<String> = fs::read_dir(&library)
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| e.file_name().to_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut symlinks = Vec::new();
+    let mut orphans = Vec::new();
+    let mut healthy = 0;
+    if let Ok(rd) = fs::read_dir(&mods) {
+        for entry in rd.flatten() {
+            if !is_zip(&entry.path()) {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            match entry.metadata() {
+                Ok(m) if m.file_type().is_symlink() => symlinks.push(name.clone()),
+                Ok(_) => healthy += 1,
+                Err(_) => continue,
+            }
+            if !lib_files.contains(&name) {
+                orphans.push(name);
+            }
+        }
+    }
+    Ok(HealthReport {
+        failed_mods,
+        symlinks,
+        orphans,
+        healthy,
+        log_found,
+    })
+}
+
+/// Convert any stray symlinks in the mods folder into hardlinks (copy fallback).
+#[tauri::command]
+fn fix_links(app: AppHandle) -> Result<usize, String> {
+    let cfg = load_config(&app)?;
+    let mods = PathBuf::from(&cfg.mods_dir);
+    let mut fixed = 0;
+    let rd = fs::read_dir(&mods).map_err(|e| e.to_string())?;
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let is_symlink = entry
+            .metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        if !is_symlink || !is_zip(&path) {
+            continue;
+        }
+        let target = fs::read_link(&path).map_err(|e| e.to_string())?;
+        let target = if target.is_absolute() {
+            target
+        } else {
+            mods.join(&target)
+        };
+        if !target.exists() {
+            continue;
+        }
+        fs::remove_file(&path).map_err(|e| e.to_string())?;
+        if fs::hard_link(&target, &path).is_err() {
+            fs::copy(&target, &path).map_err(|e| e.to_string())?;
+        }
+        fixed += 1;
+    }
+    Ok(fixed)
+}
+
+// ---------------------------------------------------------------------------
+// Mod profiles: named snapshots of the enabled set.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Profile {
+    id: String,
+    name: String,
+    #[serde(default)]
+    mods: Vec<String>,
+}
+
+fn load_profiles(app: &AppHandle) -> Result<Vec<Profile>, String> {
+    let path = config_dir(app)?.join("profiles.json");
+    if path.exists() {
+        let s = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&s).map_err(|e| e.to_string())
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+fn write_profiles(app: &AppHandle, list: &[Profile]) -> Result<(), String> {
+    let path = config_dir(app)?.join("profiles.json");
+    let s = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
+    fs::write(path, s).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_profiles(app: AppHandle) -> Result<Vec<Profile>, String> {
+    load_profiles(&app)
+}
+
+#[tauri::command]
+fn save_profile(app: AppHandle, profile: Profile) -> Result<(), String> {
+    let mut list = load_profiles(&app)?;
+    match list.iter_mut().find(|p| p.id == profile.id) {
+        Some(existing) => *existing = profile,
+        None => list.push(profile),
+    }
+    write_profiles(&app, &list)
+}
+
+#[tauri::command]
+fn delete_profile(app: AppHandle, id: String) -> Result<(), String> {
+    let mut list = load_profiles(&app)?;
+    list.retain(|p| p.id != id);
+    write_profiles(&app, &list)
+}
+
+/// Enable exactly the profile's items, disabling everything else in the mods
+/// folder — a one-click swap between mod loadouts.
+#[tauri::command]
+fn apply_profile(app: AppHandle, id: String) -> Result<(), String> {
+    let profile = load_profiles(&app)?
+        .into_iter()
+        .find(|p| p.id == id)
+        .ok_or("profile not found")?;
+    for f in &profile.mods {
+        safe_filename(f)?;
+    }
+    let cfg = load_config(&app)?;
+    let keep: std::collections::HashSet<&String> = profile.mods.iter().collect();
+    if let Ok(rd) = fs::read_dir(&cfg.mods_dir) {
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if is_zip(&entry.path()) && !keep.contains(&name) {
+                apply_enabled(&cfg, &name, false)?;
+            }
+        }
+    }
+    for f in &profile.mods {
+        apply_enabled(&cfg, f, true)?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Savegame backup / restore (zip a savegame folder).
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupInfo {
+    name: String,
+    slot: String,
+    size: u64,
+}
+
+fn backups_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = config_dir(app)?.join("backups");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+#[tauri::command]
+fn list_backups(app: AppHandle) -> Result<Vec<BackupInfo>, String> {
+    let dir = backups_dir(&app)?;
+    let mut out = Vec::new();
+    if let Ok(rd) = fs::read_dir(&dir) {
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.ends_with(".zip") {
+                continue;
+            }
+            let slot = name.split('_').next().unwrap_or("").to_string();
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            out.push(BackupInfo { name, slot, size });
+        }
+    }
+    out.sort_by(|a, b| b.name.cmp(&a.name));
+    Ok(out)
+}
+
+/// Zip a directory's contents into `dest`.
+fn zip_dir(src: &Path, dest: &Path) -> Result<(), String> {
+    let file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipWriter::new(file);
+    let opts: zip::write::FileOptions<()> =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    for entry in walkdir::WalkDir::new(src).into_iter().flatten() {
+        let path = entry.path();
+        let rel = match path.strip_prefix(src) {
+            Ok(r) if !r.as_os_str().is_empty() => r,
+            _ => continue,
+        };
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        if path.is_dir() {
+            zip.add_directory(format!("{rel_str}/"), opts)
+                .map_err(|e| e.to_string())?;
+        } else {
+            zip.start_file(rel_str, opts).map_err(|e| e.to_string())?;
+            use std::io::Write;
+            zip.write_all(&fs::read(path).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    zip.finish().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn backup_savegame(app: AppHandle, slot: String) -> Result<String, String> {
+    safe_filename(&slot)?;
+    let cfg = load_config(&app)?;
+    let src = game_dir(&cfg).join(&slot);
+    if !src.is_dir() {
+        return Err("savegame folder not found".into());
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let backup_name = format!("{slot}_{stamp}.zip");
+    let dest = backups_dir(&app)?.join(&backup_name);
+    zip_dir(&src, &dest)?;
+    Ok(backup_name)
+}
+
+#[tauri::command]
+fn restore_savegame(app: AppHandle, backup_name: String, slot: String) -> Result<(), String> {
+    safe_filename(&backup_name)?;
+    safe_filename(&slot)?;
+    let cfg = load_config(&app)?;
+    let backup = backups_dir(&app)?.join(&backup_name);
+    let file = std::fs::File::open(&backup).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let dest = game_dir(&cfg).join(&slot);
+    fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        let out = match entry.enclosed_name() {
+            Some(p) => dest.join(p),
+            None => continue,
+        };
+        if entry.is_dir() {
+            fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+        } else {
+            if let Some(parent) = out.parent() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            let mut outfile = std::fs::File::create(&out).map_err(|e| e.to_string())?;
+            std::io::copy(&mut entry, &mut outfile).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// External storage: back up manifest + saves + scenarios to a GitHub repo.
+// ---------------------------------------------------------------------------
+
+fn sync_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(config_dir(app)?.join("sync"))
+}
+
+fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|e| format!("{program} not runnable: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr)
+            .trim()
+            .to_string())
+    }
+}
+
+fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let mut full = vec!["-C", dir.to_str().unwrap_or(".")];
+    full.extend_from_slice(args);
+    run_cmd("git", &full)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncStatus {
+    repo: Option<String>,
+    cloned: bool,
+}
+
+#[tauri::command]
+fn sync_status(app: AppHandle) -> Result<SyncStatus, String> {
+    let cfg = load_config(&app)?;
+    let cloned = sync_dir(&app)?.join(".git").exists();
+    Ok(SyncStatus {
+        repo: cfg.sync_repo,
+        cloned,
+    })
+}
+
+/// Create (if needed) and clone a private GitHub repo for backups, via `gh`.
+#[tauri::command]
+fn sync_setup(app: AppHandle, name: String) -> Result<String, String> {
+    if name.is_empty() || name.contains('/') || name.contains(' ') {
+        return Err("enter a simple repo name, e.g. fs25-backup".into());
+    }
+    let owner = run_cmd("gh", &["api", "user", "--jq", ".login"])
+        .map_err(|e| format!("gh not authenticated? {e}"))?
+        .trim()
+        .to_string();
+    let slug = format!("{owner}/{name}");
+    // Create the repo (ignore error if it already exists).
+    let _ = run_cmd("gh", &["repo", "create", &slug, "--private"]);
+
+    let sync = sync_dir(&app)?;
+    if sync.join(".git").exists() {
+        git(&sync, &["remote", "set-url", "origin", &format!("https://github.com/{slug}.git")])?;
+    } else {
+        if sync.exists() {
+            fs::remove_dir_all(&sync).ok();
+        }
+        run_cmd(
+            "git",
+            &[
+                "clone",
+                &format!("https://github.com/{slug}.git"),
+                sync.to_str().unwrap(),
+            ],
+        )?;
+    }
+
+    let mut cfg = load_config(&app)?;
+    cfg.sync_repo = Some(slug.clone());
+    write_config(&app, &cfg)?;
+    Ok(slug)
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestEntry {
+    filename: String,
+    title: String,
+    kind: String,
+    mod_id: String,
+}
+
+/// Push a snapshot: scenarios/profiles/catalog + a mod manifest + zipped saves.
+#[tauri::command]
+fn sync_push(app: AppHandle) -> Result<String, String> {
+    let sync = sync_dir(&app)?;
+    if !sync.join(".git").exists() {
+        return Err("sync isn't set up yet".into());
+    }
+    let cfgdir = config_dir(&app)?;
+    let _ = git(&sync, &["pull", "--no-edit"]);
+
+    // Small config files (never sync config.json — its paths are machine-specific).
+    for f in ["scenarios.json", "profiles.json", "catalog.json"] {
+        let src = cfgdir.join(f);
+        if src.exists() {
+            fs::copy(&src, sync.join(f)).map_err(|e| e.to_string())?;
+        }
+    }
+
+    // Mod manifest: library items + their ModHub id (so they can be re-fetched).
+    let items = scan(&app)?;
+    let conn = modhub_db(&app)?;
+    let mut title_to_id: HashMap<String, String> = HashMap::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT title, mod_id FROM mods") {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        }) {
+            for row in rows.flatten() {
+                let key = row.0.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
+                title_to_id.insert(key, row.1);
+            }
+        }
+    }
+    let manifest: Vec<ManifestEntry> = items
+        .iter()
+        .map(|i| {
+            let key = i.title.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
+            ManifestEntry {
+                filename: i.filename.clone(),
+                title: i.title.clone(),
+                kind: i.kind.clone(),
+                mod_id: title_to_id.get(&key).cloned().unwrap_or_default(),
+            }
+        })
+        .collect();
+    fs::write(
+        sync.join("mod-manifest.json"),
+        serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Zip each savegame into saves/.
+    let saves_dir = sync.join("saves");
+    fs::create_dir_all(&saves_dir).map_err(|e| e.to_string())?;
+    let gdir = game_dir(&load_config(&app)?);
+    let mut save_count = 0;
+    if let Ok(rd) = fs::read_dir(&gdir) {
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("savegame")
+                && entry.path().join("careerSavegame.xml").exists()
+            {
+                zip_dir(&entry.path(), &saves_dir.join(format!("{name}.zip")))?;
+                save_count += 1;
+            }
+        }
+    }
+
+    git(&sync, &["add", "-A"])?;
+    // Commit may report "nothing to commit" — that's fine.
+    let _ = git(&sync, &["commit", "-m", "fs25 manager backup"]);
+    git(&sync, &["push"])?;
+
+    Ok(format!(
+        "Pushed {} mods, {} saves to backup.",
+        manifest.len(),
+        save_count
+    ))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PullResult {
+    restored: Vec<String>,
+    /// Manifest mods not present locally (with a ModHub id to re-download).
+    missing: Vec<ManifestEntry>,
+    saves_available: usize,
+}
+
+/// Pull a snapshot: restore scenarios/profiles/catalog, copy saves into the
+/// local backups folder, and report mods to re-download from ModHub.
+#[tauri::command]
+fn sync_pull(app: AppHandle) -> Result<PullResult, String> {
+    let sync = sync_dir(&app)?;
+    if !sync.join(".git").exists() {
+        return Err("sync isn't set up yet".into());
+    }
+    git(&sync, &["pull", "--no-edit"])?;
+    let cfgdir = config_dir(&app)?;
+
+    let mut restored = Vec::new();
+    for f in ["scenarios.json", "profiles.json", "catalog.json"] {
+        let src = sync.join(f);
+        if src.exists() {
+            fs::copy(&src, cfgdir.join(f)).map_err(|e| e.to_string())?;
+            restored.push(f.to_string());
+        }
+    }
+
+    // Copy synced saves into the local backups folder for restore via the UI.
+    let mut saves_available = 0;
+    let saves_src = sync.join("saves");
+    if saves_src.is_dir() {
+        let backups = backups_dir(&app)?;
+        if let Ok(rd) = fs::read_dir(&saves_src) {
+            for entry in rd.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.ends_with(".zip") {
+                    // saved as "savegameN.zip" -> keep a distinct backup name
+                    let dest = backups.join(format!("{}_synced.zip", name.trim_end_matches(".zip")));
+                    fs::copy(entry.path(), dest).map_err(|e| e.to_string())?;
+                    saves_available += 1;
+                }
+            }
+        }
+    }
+
+    // Which manifest mods are missing locally?
+    let cfg = load_config(&app)?;
+    let lib_files: std::collections::HashSet<String> = fs::read_dir(&cfg.library_dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| e.file_name().to_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut missing = Vec::new();
+    if let Ok(s) = fs::read_to_string(sync.join("mod-manifest.json")) {
+        if let Ok(entries) = serde_json::from_str::<Vec<ManifestEntry>>(&s) {
+            for e in entries {
+                if !lib_files.contains(&e.filename) && !e.mod_id.is_empty() {
+                    missing.push(e);
+                }
+            }
+        }
+    }
+
+    Ok(PullResult {
+        restored,
+        missing,
+        saves_available,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Savegame slots: browse all 20, edit start money/name, clone into a slot.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SlotInfo {
+    slot: String,
+    occupied: bool,
+    name: String,
+    map_title: String,
+    money: Option<f64>,
+}
+
+#[tauri::command]
+fn list_slots(app: AppHandle) -> Result<Vec<SlotInfo>, String> {
+    let cfg = load_config(&app)?;
+    let dir = game_dir(&cfg);
+    let mut out = Vec::new();
+    for n in 1..=20 {
+        let slot = format!("savegame{n}");
+        match read_save(&dir, &slot) {
+            Some(info) => out.push(SlotInfo {
+                slot,
+                occupied: true,
+                name: info.name,
+                map_title: info.map_title,
+                money: info.money,
+            }),
+            None => out.push(SlotInfo {
+                slot,
+                occupied: false,
+                name: String::new(),
+                map_title: String::new(),
+                money: None,
+            }),
+        }
+    }
+    Ok(out)
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Edit a savegame's starting money and/or name in place (backs it up first).
+#[tauri::command]
+fn patch_savegame(
+    app: AppHandle,
+    slot: String,
+    name: Option<String>,
+    money: Option<f64>,
+) -> Result<(), String> {
+    safe_filename(&slot)?;
+    let cfg = load_config(&app)?;
+    let dir = game_dir(&cfg).join(&slot);
+    let career_path = dir.join("careerSavegame.xml");
+    if !career_path.exists() {
+        return Err("no savegame in that slot".into());
+    }
+    // Always snapshot before editing so a bad edit is recoverable.
+    backup_savegame(app.clone(), slot.clone())?;
+
+    let mut career = fs::read_to_string(&career_path).map_err(|e| e.to_string())?;
+    if let Some(m) = money {
+        let mi = m.round() as i64;
+        let re = regex::Regex::new(r"<money>[^<]*</money>").map_err(|e| e.to_string())?;
+        career = re
+            .replace_all(&career, format!("<money>{mi}</money>").as_str())
+            .into_owned();
+    }
+    if let Some(n) = &name {
+        let re = regex::Regex::new(r"<savegameName>[^<]*</savegameName>")
+            .map_err(|e| e.to_string())?;
+        career = re
+            .replace(
+                &career,
+                format!("<savegameName>{}</savegameName>", xml_escape(n)).as_str(),
+            )
+            .into_owned();
+    }
+    fs::write(&career_path, career).map_err(|e| e.to_string())?;
+
+    // The farm's balance in farms.xml is authoritative — patch it too.
+    if let Some(m) = money {
+        let farms_path = dir.join("farms.xml");
+        if let Ok(farms) = fs::read_to_string(&farms_path) {
+            let re = regex::Regex::new(r#"(<farm\b[^>]*?\bmoney=")[^"]*""#)
+                .map_err(|e| e.to_string())?;
+            let patched = re.replace(&farms, format!("${{1}}{:.6}\"", m).as_str());
+            fs::write(&farms_path, patched.as_ref()).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
+    for entry in walkdir::WalkDir::new(src).into_iter().flatten() {
+        let path = entry.path();
+        let rel = match path.strip_prefix(src) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let target = dst.join(rel);
+        if path.is_dir() {
+            fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+        } else {
+            if let Some(p) = target.parent() {
+                fs::create_dir_all(p).ok();
+            }
+            fs::copy(path, &target).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Copy one savegame slot's folder into another (overwriting the target).
+#[tauri::command]
+fn clone_savegame(app: AppHandle, from_slot: String, to_slot: String) -> Result<(), String> {
+    safe_filename(&from_slot)?;
+    safe_filename(&to_slot)?;
+    if from_slot == to_slot {
+        return Err("source and target slots are the same".into());
+    }
+    let cfg = load_config(&app)?;
+    let dir = game_dir(&cfg);
+    let src = dir.join(&from_slot);
+    let dst = dir.join(&to_slot);
+    if !src.join("careerSavegame.xml").exists() {
+        return Err("source save not found".into());
+    }
+    if dst.exists() {
+        fs::remove_dir_all(&dst).map_err(|e| e.to_string())?;
+    }
+    copy_dir(&src, &dst)
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_http::init())
+        .invoke_handler(tauri::generate_handler![
+            get_config,
+            save_config,
+            launch_game,
+            list_items,
+            set_enabled,
+            set_enabled_many,
+            set_active_map,
+            update_meta,
+            import_from_mods,
+            modhub_upsert,
+            modhub_all,
+            download_mod,
+            fetch_image,
+            list_savegames,
+            list_scenarios,
+            save_scenario,
+            delete_scenario,
+            apply_scenario,
+            health_check,
+            fix_links,
+            list_profiles,
+            save_profile,
+            delete_profile,
+            apply_profile,
+            list_backups,
+            backup_savegame,
+            restore_savegame,
+            sync_status,
+            sync_setup,
+            sync_push,
+            sync_pull,
+            list_slots,
+            patch_savegame,
+            clone_savegame,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
