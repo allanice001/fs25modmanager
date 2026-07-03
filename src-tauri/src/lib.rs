@@ -18,9 +18,15 @@ use tauri::{AppHandle, Manager};
 // Config
 // ---------------------------------------------------------------------------
 
+/// Bump when the on-disk data formats change so future versions can migrate.
+const DATA_VERSION: u32 = 1;
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct Config {
+    /// Schema version of the app's stored data (config/catalog/scenarios/…).
+    #[serde(default = "one")]
+    version: u32,
     /// Folder that holds all downloaded mod/map zips.
     library_dir: String,
     /// The FS25 `mods` folder that the game reads.
@@ -60,11 +66,16 @@ fn default_link_mode() -> String {
     "hardlink".into()
 }
 
+fn one() -> u32 {
+    1
+}
+
 fn default_config() -> Config {
     let library = dirs::document_dir()
         .unwrap_or_default()
         .join("FS25ModLibrary");
     Config {
+        version: DATA_VERSION,
         library_dir: library.to_string_lossy().into_owned(),
         mods_dir: default_mods_dir().to_string_lossy().into_owned(),
         link_mode: default_link_mode(),
@@ -1457,6 +1468,16 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
 struct SyncStatus {
     repo: Option<String>,
     cloned: bool,
+    /// Whether `git` and `gh` are installed — sync needs both.
+    tools_ok: bool,
+}
+
+fn cmd_exists(prog: &str) -> bool {
+    std::process::Command::new(prog)
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -1466,6 +1487,7 @@ fn sync_status(app: AppHandle) -> Result<SyncStatus, String> {
     Ok(SyncStatus {
         repo: cfg.sync_repo,
         cloned,
+        tools_ok: cmd_exists("git") && cmd_exists("gh"),
     })
 }
 
@@ -1904,6 +1926,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             get_config,
             save_config,

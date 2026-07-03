@@ -110,6 +110,7 @@ export interface SlotInfo {
 export interface SyncStatus {
   repo: string | null;
   cloned: boolean;
+  toolsOk: boolean;
 }
 
 export interface ManifestEntry {

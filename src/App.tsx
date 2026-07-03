@@ -10,6 +10,7 @@ import {
   SyncStatus,
 } from "./api";
 import { checkUpdates, UpdateInfo } from "./updates";
+import { checkForUpdate } from "./updater";
 import Scenarios from "./Scenarios";
 import ModHub from "./ModHub";
 import Saves from "./Saves";
@@ -50,6 +51,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [hideIncompat, setHideIncompat] = useState(false);
+  const [modSearch, setModSearch] = useState("");
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [updates, setUpdates] = useState<UpdateInfo[]>([]);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
@@ -72,6 +74,7 @@ export default function App() {
 
   useEffect(() => {
     refresh();
+    checkForUpdate(); // prompt if a newer signed release exists
   }, []);
 
   const activeMap = useMemo(
@@ -81,7 +84,16 @@ export default function App() {
 
   const mods = items.filter((i) => i.kind === "mod");
   const maps = items.filter((i) => i.kind === "map");
-  const visibleMods = hideIncompat ? mods.filter((m) => m.compatible) : mods;
+  const q = modSearch.trim().toLowerCase();
+  const visibleMods = mods
+    .filter((m) => !hideIncompat || m.compatible)
+    .filter(
+      (m) =>
+        !q ||
+        (m.title + " " + m.filename + " " + m.category + " " + m.tags.join(" "))
+          .toLowerCase()
+          .includes(q),
+    );
 
   async function guard(fn: () => Promise<void>) {
     setBusy(true);
@@ -222,6 +234,25 @@ export default function App() {
       <main>
         {tab === "mods" && (
           <>
+            {items.length === 0 && (
+              <div className="onboard">
+                <b>👋 Welcome!</b> Your library is empty. If you already have mods
+                in the FS25 game folder, import them to get started:
+                <button
+                  className="btn"
+                  disabled={busy}
+                  onClick={() => guard(() => api.importFromMods().then(() => {}))}
+                >
+                  ⬇ Import from game folder
+                </button>
+                <button
+                  className="btn ghost"
+                  onClick={() => setTab("settings")}
+                >
+                  Settings
+                </button>
+              </div>
+            )}
             <div className="profiles-bar">
               <span className="pb-label">Profiles:</span>
               {profiles.length === 0 && (
@@ -262,13 +293,19 @@ export default function App() {
             </div>
 
             <div className="toolbar">
+              <input
+                className="mod-search"
+                value={modSearch}
+                placeholder="🔍 search mods…"
+                onChange={(e) => setModSearch(e.target.value)}
+              />
               <label className="check">
                 <input
                   type="checkbox"
                   checked={hideIncompat}
                   onChange={(e) => setHideIncompat(e.target.checked)}
                 />
-                Hide mods incompatible with the active map
+                Hide incompatible
               </label>
               <button
                 className="btn ghost sm"
@@ -825,7 +862,14 @@ function Settings({
           — they’re re-downloaded from ModHub on restore.
         </span>
 
-        {!sync?.cloned ? (
+        {sync && !sync.toolsOk ? (
+          <span className="hint" style={{ color: "var(--warn)" }}>
+            ⚠ GitHub sync needs the <b>git</b> and <b>gh</b> command-line tools
+            installed and <code>gh</code> authenticated. Install them (e.g.
+            <code>brew install git gh</code> on macOS, or winget on Windows) and
+            reopen the app.
+          </span>
+        ) : !sync?.cloned ? (
           <div className="path-row">
             <input
               value={syncName}

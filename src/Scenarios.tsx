@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, ModHubEntry, ModItem, SaveInfo, Scenario } from "./api";
+import {
+  api,
+  ModHubEntry,
+  ModItem,
+  SaveInfo,
+  Scenario,
+  SlotInfo,
+} from "./api";
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
   PRESETS,
   RULES,
@@ -94,6 +102,7 @@ export default function Scenarios({
 }) {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [saves, setSaves] = useState<SaveInfo[]>([]);
+  const [slots, setSlots] = useState<SlotInfo[]>([]);
   const [editing, setEditing] = useState<Scenario | null>(null);
   const [generating, setGenerating] = useState(false);
   const [pickingSave, setPickingSave] = useState(false);
@@ -116,13 +125,36 @@ export default function Scenarios({
     }
   }
 
-  // Re-read just the savegames (they change outside the app, as you play).
+  // Re-read savegames + slots (they change outside the app, as you play).
   async function refreshSaves() {
     try {
-      setSaves(await api.listSavegames());
+      const [sg, sl] = await Promise.all([
+        api.listSavegames(),
+        api.listSlots(),
+      ]);
+      setSaves(sg);
+      setSlots(sl);
     } catch (e) {
       setError(String(e));
     }
+  }
+
+  // Create a savegame for a scenario: clone a source save (same map) into a
+  // target slot, then stamp the scenario's money + name onto it.
+  async function seedSave(scenario: Scenario, from: string, to: string) {
+    const target = slots.find((s) => s.slot === to);
+    if (target?.occupied) {
+      const ok = await ask(
+        `${to} already has a save (${target.name}). Overwrite it with this scenario?`,
+        { title: "Overwrite savegame", kind: "warning" },
+      );
+      if (!ok) return;
+    }
+    await guard(async () => {
+      await api.cloneSavegame(from, to);
+      await api.patchSavegame(to, scenario.name || null, scenario.startMoney);
+      await refreshSaves();
+    });
   }
 
   useEffect(() => {
@@ -379,6 +411,13 @@ export default function Scenarios({
                     )
                   }
                 />
+                <SeedButton
+                  scenario={s}
+                  saves={saves}
+                  slots={slots}
+                  busy={busy}
+                  onSeed={(from, to) => seedSave(s, from, to)}
+                />
                 <button
                   className="btn ghost sm"
                   disabled={busy}
@@ -426,6 +465,76 @@ function ApplyButton({
         />
         clean slate
       </label>
+    </div>
+  );
+}
+
+function SeedButton({
+  scenario,
+  saves,
+  slots,
+  busy,
+  onSeed,
+}: {
+  scenario: Scenario;
+  saves: SaveInfo[];
+  slots: SlotInfo[];
+  busy: boolean;
+  onSeed: (from: string, to: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  return (
+    <div className="seed">
+      <button
+        className="btn ghost sm"
+        disabled={busy}
+        title="Create a savegame for this scenario by cloning an existing save on the same map and stamping the scenario's money + name onto it."
+        onClick={() => setOpen((o) => !o)}
+      >
+        💾 Seed save
+      </button>
+      {open && (
+        <div className="seed-form">
+          {saves.length === 0 ? (
+            <span className="hint">
+              No savegames yet — start a game on this scenario's map in FS25
+              first, then Rescan.
+            </span>
+          ) : (
+            <>
+              <select value={from} onChange={(e) => setFrom(e.target.value)}>
+                <option value="">clone from save…</option>
+                {saves.map((s) => (
+                  <option key={s.slot} value={s.slot}>
+                    {s.slot}: {s.name} — {s.mapTitle}
+                  </option>
+                ))}
+              </select>
+              <select value={to} onChange={(e) => setTo(e.target.value)}>
+                <option value="">into slot…</option>
+                {slots.map((sl) => (
+                  <option key={sl.slot} value={sl.slot}>
+                    {sl.slot.replace("savegame", "#")}
+                    {sl.occupied ? ` (${sl.name || "in use"})` : " (empty)"}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="btn sm"
+                disabled={busy || !from || !to}
+                onClick={() => {
+                  onSeed(from, to);
+                  setOpen(false);
+                }}
+              >
+                Create {scenario.startMoney != null ? "with $" + scenario.startMoney : ""}
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

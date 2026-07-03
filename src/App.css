@@ -204,6 +204,27 @@ main {
   color: var(--muted);
   font-size: 12px;
 }
+.mod-search {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  min-width: 160px;
+}
+.onboard {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
 .check {
   display: flex;
   align-items: center;
@@ -641,6 +662,21 @@ main {
   flex-direction: column;
   gap: 4px;
   align-items: center;
+}
+.seed-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.seed-form select {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 12px;
+  max-width: 200px;
 }
 .check.tiny {
   font-size: 11px;
