@@ -28,7 +28,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 roxmltree = "0.20"
 dirs = "5"
 regex = "1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-tls", "stream"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 tokio = { version = "1", features = ["fs", "io-util"] }
 futures-util = "0.3"
