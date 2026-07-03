@@ -95,7 +95,7 @@ jobs:
           gh api "repos/$REPO/releases/$REL/assets" --paginate \
             --jq '.[] | "\(.id)\t\(.name)"' | while IFS=$'\t' read -r id name; do
             echo "downloading $name"
-            gh api "repos/$REPO/releases/$REL/assets/$id" \
+            gh api "repos/$REPO/releases/assets/$id" \
               -H "Accept: application/octet-stream" > "out/$name"
           done
           ls -la out
