@@ -473,6 +473,7 @@ export default function Scenarios({
                   slots={slots}
                   templateSlot={s.map ? templates[mapKeyOfFile(s.map)] : undefined}
                   busy={busy}
+                  onRefreshSaves={refreshSaves}
                   onSeed={(from, to) => seedSave(s, from, to)}
                 />
                 <button
@@ -534,6 +535,7 @@ function SeedButton({
   slots,
   templateSlot,
   busy,
+  onRefreshSaves,
   onSeed,
 }: {
   scenario: Scenario;
@@ -543,6 +545,7 @@ function SeedButton({
   slots: SlotInfo[];
   templateSlot?: string;
   busy: boolean;
+  onRefreshSaves: () => void;
   onSeed: (from: string, to: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -552,20 +555,35 @@ function SeedButton({
     mapFile || mapTitle
       ? saves.filter((s) => saveOnMap(s, mapFile, mapTitle))
       : saves;
-  // Default the source to the designated template, else the first same-map save.
-  const [from, setFrom] = useState(
-    templateSlot && sameMap.some((s) => s.slot === templateSlot)
-      ? templateSlot
-      : (sameMap[0]?.slot ?? ""),
-  );
+  const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+
+  // Whenever the popover opens or a refresh brings new saves, (re)pick a sensible
+  // source: the designated template, else the first same-map save.
+  const sameMapKey = sameMap.map((s) => s.slot).join(",");
+  useEffect(() => {
+    if (!open || sameMap.some((s) => s.slot === from)) return;
+    setFrom(
+      templateSlot && sameMap.some((s) => s.slot === templateSlot)
+        ? templateSlot
+        : (sameMap[0]?.slot ?? ""),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, sameMapKey, templateSlot]);
+
   return (
     <div className="seed">
       <button
         className="btn ghost sm"
         disabled={busy}
         title="Create a savegame for this scenario by cloning a save on the same map and stamping the scenario's money + name onto it. Mark a fresh save as the map's template (Saves tab) to auto-pick it."
-        onClick={() => setOpen((o) => !o)}
+        onClick={() =>
+          setOpen((o) => {
+            // Re-read savegames on open — they change as you play outside the app.
+            if (!o) onRefreshSaves();
+            return !o;
+          })
+        }
       >
         💾 Seed save
       </button>
