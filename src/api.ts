@@ -95,6 +95,8 @@ export interface SaveInfo {
   money: number | null;
   loan: number | null;
   assetValue: number | null;
+  /** Value of owned vehicles only (excludes a map's pre-placed buildings). */
+  vehicleValue: number | null;
   playTimeHours: number | null;
   yearsElapsed: number | null;
   mods: string[];
