@@ -1468,9 +1468,35 @@ fn sync_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(config_dir(app)?.join("sync"))
 }
 
+/// PATH to use for CLI subprocesses. A macOS/Linux GUI app launched from Finder
+/// gets a minimal PATH without Homebrew (`/opt/homebrew/bin`, `/usr/local/bin`),
+/// so `gh` isn't found even though it works in `tauri dev` (launched from a
+/// shell). Prepend the common install dirs. Windows GUI apps already inherit the
+/// system PATH, so this is unix-only.
+#[cfg(not(target_os = "windows"))]
+fn cli_path() -> String {
+    let existing = std::env::var("PATH").unwrap_or_default();
+    let extra = "/opt/homebrew/bin:/usr/local/bin";
+    if existing.is_empty() {
+        format!("{extra}:/usr/bin:/bin:/usr/sbin:/sbin")
+    } else {
+        format!("{extra}:{existing}")
+    }
+}
+
+/// Apply the augmented PATH so bundled apps can locate `git`/`gh`.
+fn apply_cli_env(cmd: &mut std::process::Command) {
+    #[cfg(not(target_os = "windows"))]
+    cmd.env("PATH", cli_path());
+    #[cfg(target_os = "windows")]
+    let _ = cmd;
+}
+
 fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new(program)
-        .args(args)
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args);
+    apply_cli_env(&mut cmd);
+    let out = cmd
         .output()
         .map_err(|e| format!("{program} not runnable: {e}"))?;
     if out.status.success() {
@@ -1496,11 +1522,10 @@ struct SyncStatus {
 }
 
 fn cmd_exists(prog: &str) -> bool {
-    std::process::Command::new(prog)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    let mut cmd = std::process::Command::new(prog);
+    cmd.arg("--version");
+    apply_cli_env(&mut cmd);
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
 #[tauri::command]
@@ -2135,6 +2160,14 @@ mod tests {
             career_set_name(career, "New & <Fancy>"),
             "<savegameName>New &amp; &lt;Fancy&gt;</savegameName>"
         );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn cli_path_includes_homebrew_dirs() {
+        let p = cli_path();
+        assert!(p.contains("/opt/homebrew/bin"));
+        assert!(p.contains("/usr/local/bin"));
     }
 
     #[test]
