@@ -156,14 +156,16 @@ export default function Scenarios({
   // Create a savegame for a scenario: clone a source save (same map) into a
   // target slot, then stamp the scenario's money + name onto it.
   async function seedSave(scenario: Scenario, from: string, to: string) {
-    // A from-scratch scenario expects the source to be a true zero-asset save
-    // (made via FS25's "Start From Scratch"). Warn if it clearly isn't.
+    // A from-scratch scenario expects the source to be a fresh save (made via
+    // FS25's "Start From Scratch"). Judge that by owned *equipment* value, not
+    // total assets — a map's pre-placed farmstead buildings are on your farm
+    // even on a scratch start and shouldn't count.
     const zeroStart = scenario.mode === "scratch" || !!scenario.warmupToJanuary;
     const src = saves.find((s) => s.slot === from);
-    if (zeroStart && src && (src.assetValue ?? 0) > 50_000) {
+    if (zeroStart && src && (src.vehicleValue ?? 0) > 200_000) {
       const ok = await ask(
-        `${from} holds ~${money(src.assetValue ?? 0)} in assets, so the seeded save won't be a zero start. For a true from-scratch run, start a New Game in FS25 with "Start From Scratch", save it, ⭐ it as this map's template, then seed from that.\n\nSeed from ${from} anyway?`,
-        { title: "Not a zero-asset save", kind: "warning" },
+        `${from} already has ~${money(src.vehicleValue ?? 0)} of owned equipment, so it isn't a fresh start. For a true from-scratch run, start a New Game in FS25 with "Start From Scratch", save it, ⭐ it as this map's template, then seed from that.\n\nSeed from ${from} anyway?`,
+        { title: "Not a fresh start", kind: "warning" },
       );
       if (!ok) return;
     }

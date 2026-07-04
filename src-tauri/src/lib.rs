@@ -889,6 +889,9 @@ struct SaveInfo {
     /// Purchase-price value of owned vehicles + placeables (approximate; the
     /// game's own figure uses depreciated sell values and includes land).
     asset_value: Option<f64>,
+    /// Purchase-price value of owned vehicles only — excludes a map's pre-placed
+    /// farmstead buildings, so it reflects equipment the player actually bought.
+    vehicle_value: Option<f64>,
     play_time_hours: Option<f64>,
     /// Approximate in-game years elapsed (12 periods = 1 year).
     years_elapsed: Option<f64>,
@@ -1026,10 +1029,19 @@ fn read_save(dir: &Path, slot: &str) -> Option<SaveInfo> {
         Some((l, id)) => (l, Some(id)),
         None => (None, None),
     };
-    let asset_value = farm_id.as_ref().map(|fid| {
-        sum_owned_prices(&base.join("vehicles.xml"), fid)
-            + sum_owned_prices(&base.join("placeables.xml"), fid)
-    });
+    // Value owned vehicles separately from buildings: a map's pre-placed
+    // farmstead placeables (barns, etc.) are assigned to the player's farm even
+    // on a "Start From Scratch" game, so total assets overstate what the player
+    // actually accumulated. Vehicle value is the honest "have you built up a
+    // fleet" signal used by the zero-start seed check.
+    let (vehicle_value, asset_value) = match farm_id.as_ref() {
+        Some(fid) => {
+            let v = sum_owned_prices(&base.join("vehicles.xml"), fid);
+            let p = sum_owned_prices(&base.join("placeables.xml"), fid);
+            (Some(v), Some(v + p))
+        }
+        None => (None, None),
+    };
 
     Some(SaveInfo {
         slot: slot.to_string(),
@@ -1038,6 +1050,7 @@ fn read_save(dir: &Path, slot: &str) -> Option<SaveInfo> {
         money,
         loan,
         asset_value,
+        vehicle_value,
         play_time_hours,
         years_elapsed,
         mods,
