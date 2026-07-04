@@ -2108,8 +2108,7 @@ fn disk_report(app: AppHandle) -> Result<DiskReport, String> {
 
     // Orphans: mods-folder zips not present in the library.
     let cfg = load_config(&app)?;
-    let lib: std::collections::HashSet<String> =
-        items.iter().map(|i| i.filename.clone()).collect();
+    let lib: std::collections::HashSet<String> = items.iter().map(|i| i.filename.clone()).collect();
     let mut orphans = Vec::new();
     if let Ok(rd) = fs::read_dir(&cfg.mods_dir) {
         for entry in rd.flatten() {
