@@ -15,9 +15,23 @@ import { checkForUpdate } from "./updater";
 import Scenarios from "./Scenarios";
 import ModHub from "./ModHub";
 import Saves from "./Saves";
+import Disk from "./Disk";
 import "./App.css";
 
-type Tab = "mods" | "maps" | "scenarios" | "discover" | "saves" | "settings";
+type Tab =
+  | "mods"
+  | "maps"
+  | "scenarios"
+  | "discover"
+  | "saves"
+  | "disk"
+  | "settings";
+
+/** Dependency status for one mod against the current library. */
+export interface DepStatus {
+  owned: ModItem[];
+  missing: string[];
+}
 
 function fmtSize(bytes: number): string {
   if (!bytes) return "";
@@ -50,6 +64,8 @@ export default function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [items, setItems] = useState<ModItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [detail, setDetail] = useState<ModItem | null>(null);
   const [busy, setBusy] = useState(false);
   const [hideIncompat, setHideIncompat] = useState(false);
   const [modSearch, setModSearch] = useState("");
@@ -83,6 +99,24 @@ export default function App() {
     [items],
   );
 
+  // Map every library item by its zip stem so dependency names resolve.
+  const byStem = useMemo(() => {
+    const m = new Map<string, ModItem>();
+    for (const it of items) m.set(it.filename.replace(/\.zip$/i, ""), it);
+    return m;
+  }, [items]);
+
+  const resolveDeps = (it: ModItem): DepStatus => {
+    const owned: ModItem[] = [];
+    const missing: string[] = [];
+    for (const d of it.dependencies) {
+      const found = byStem.get(d);
+      if (found) owned.push(found);
+      else missing.push(d);
+    }
+    return { owned, missing };
+  };
+
   const mods = items.filter((i) => i.kind === "mod");
   const maps = items.filter((i) => i.kind === "map");
   const q = modSearch.trim().toLowerCase();
@@ -108,8 +142,25 @@ export default function App() {
     }
   }
 
-  const toggleEnabled = (it: ModItem) =>
-    guard(() => api.setEnabled(it.filename, !it.enabled));
+  const toggleEnabled = (it: ModItem) => {
+    if (it.enabled) return guard(() => api.setEnabled(it.filename, false));
+    // Enabling: also pull in any owned dependencies, warn about missing ones.
+    const { owned, missing } = resolveDeps(it);
+    const also = owned.filter((d) => !d.enabled);
+    return guard(async () => {
+      await api.setEnabledMany([it.filename, ...also.map((d) => d.filename)], true);
+      const parts: string[] = [];
+      if (also.length)
+        parts.push(
+          `Also enabled ${also.length} dependency${also.length === 1 ? "" : "s"}: ${also.map((d) => d.title).join(", ")}.`,
+        );
+      if (missing.length)
+        parts.push(
+          `⚠ Missing dependencies (not in your library): ${missing.join(", ")} — find them in Discover.`,
+        );
+      setNotice(parts.length ? parts.join(" ") : null);
+    });
+  };
 
   const setActive = (it: ModItem | null) =>
     guard(() => api.setActiveMap(it ? it.filename : null));
@@ -192,6 +243,7 @@ export default function App() {
               "scenarios",
               "discover",
               "saves",
+              "disk",
               "settings",
             ] as Tab[]
           ).map((t) => (
@@ -231,6 +283,14 @@ export default function App() {
       </header>
 
       {error && <div className="banner error">{error}</div>}
+      {notice && (
+        <div className="banner">
+          {notice}
+          <button className="link" onClick={() => setNotice(null)}>
+            dismiss
+          </button>
+        </div>
+      )}
 
       <main>
         {tab === "mods" && (
@@ -370,7 +430,9 @@ export default function App() {
                     key={it.filename}
                     item={it}
                     busy={busy}
+                    depStatus={resolveDeps(it)}
                     onToggle={() => toggleEnabled(it)}
+                    onDetail={() => setDetail(it)}
                     onSaveMeta={(patch) => saveMeta(it, patch)}
                   />
                 ))}
@@ -390,8 +452,10 @@ export default function App() {
                 item={it}
                 busy={busy}
                 isMap
+                depStatus={resolveDeps(it)}
                 onToggle={() => toggleEnabled(it)}
                 onSetActive={() => setActive(it.isActiveMap ? null : it)}
+                onDetail={() => setDetail(it)}
                 onSaveMeta={(patch) => saveMeta(it, patch)}
               />
             ))}
@@ -419,10 +483,119 @@ export default function App() {
 
         {tab === "saves" && <Saves setError={setError} />}
 
+        {tab === "disk" && <Disk setError={setError} onChanged={refresh} />}
+
         {tab === "settings" && config && (
           <Settings config={config} busy={busy} onSaved={refresh} />
         )}
       </main>
+
+      {detail && (
+        <DetailModal
+          item={detail}
+          depStatus={resolveDeps(detail)}
+          onClose={() => setDetail(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function DetailModal({
+  item,
+  depStatus,
+  onClose,
+}: {
+  item: ModItem;
+  depStatus: DepStatus;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <Badge item={item} />
+          <h2>{item.title}</h2>
+          <button className="modal-x" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <div className="modal-meta">
+          {item.author && (
+            <span>
+              <b>Author</b> {item.author}
+            </span>
+          )}
+          {item.version && (
+            <span>
+              <b>Version</b> {item.version}
+            </span>
+          )}
+          {item.size > 0 && (
+            <span>
+              <b>Size</b> {fmtSize(item.size)}
+            </span>
+          )}
+          {item.category && (
+            <span>
+              <b>Category</b> {item.category}
+            </span>
+          )}
+          <span>
+            <b>File</b> {item.filename}
+          </span>
+        </div>
+
+        {item.description ? (
+          <p className="modal-desc">{item.description}</p>
+        ) : (
+          <p className="modal-desc muted">No description in modDesc.xml.</p>
+        )}
+
+        {item.dependencies.length > 0 && (
+          <div className="modal-section">
+            <h4>Dependencies</h4>
+            <div className="dep-chips">
+              {depStatus.owned.map((d) => (
+                <span key={d.filename} className="dep-chip ok" title={d.filename}>
+                  ✓ {d.title}
+                </span>
+              ))}
+              {depStatus.missing.map((d) => (
+                <span key={d} className="dep-chip missing" title="not in library">
+                  ✗ {d}
+                </span>
+              ))}
+            </div>
+            {depStatus.missing.length > 0 && (
+              <p className="hint">
+                Missing dependencies aren’t in your library — find them in
+                Discover before playing.
+              </p>
+            )}
+          </div>
+        )}
+
+        {item.tags.length > 0 && (
+          <div className="modal-section">
+            <h4>Tags</h4>
+            <div className="dep-chips">
+              {item.tags.map((t) => (
+                <span key={t} className="dep-chip">
+                  {t}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {item.notes && (
+          <div className="modal-section">
+            <h4>Notes</h4>
+            <p>{item.notes}</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -456,15 +629,19 @@ function ItemCard({
   item,
   busy,
   isMap,
+  depStatus,
   onToggle,
   onSetActive,
+  onDetail,
   onSaveMeta,
 }: {
   item: ModItem;
   busy: boolean;
   isMap?: boolean;
+  depStatus: DepStatus;
   onToggle: () => void;
   onSetActive?: () => void;
+  onDetail: () => void;
   onSaveMeta: (patch: Partial<ModItem>) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -511,6 +688,21 @@ function ItemCard({
               active map
             </div>
           )}
+          {item.dependencies.length > 0 && (
+            <div className="deps">
+              <span className="deps-label">needs:</span>
+              {depStatus.owned.map((d) => (
+                <span key={d.filename} className="dep-chip ok" title={d.filename}>
+                  ✓ {d.title}
+                </span>
+              ))}
+              {depStatus.missing.map((d) => (
+                <span key={d} className="dep-chip missing" title="not in library">
+                  ✗ {d}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="card-actions">
@@ -529,6 +721,9 @@ function ItemCard({
             disabled={busy}
           >
             {item.enabled ? "✓ In game" : "Enable"}
+          </button>
+          <button className="btn ghost" onClick={onDetail} title="Details">
+            ℹ
           </button>
           <button className="btn ghost" onClick={() => setOpen((o) => !o)}>
             {open ? "▲" : "Edit ▾"}

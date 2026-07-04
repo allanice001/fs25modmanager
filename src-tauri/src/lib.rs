@@ -275,6 +275,9 @@ struct ModItem {
     compatible: bool,
     incompat_reasons: Vec<String>,
     size: u64,
+    description: String,
+    /// Mod names this depends on (from modDesc <dependencies>).
+    dependencies: Vec<String>,
     /// Set if we couldn't read the archive's modDesc.xml.
     error: Option<String>,
 }
@@ -398,6 +401,8 @@ fn scan(app: &AppHandle) -> Result<Vec<ModItem>, String> {
                 compatible: incompat_reasons.is_empty(),
                 incompat_reasons,
                 size,
+                description: desc.description,
+                dependencies: desc.dependencies,
                 error,
             }
         })
@@ -841,6 +846,10 @@ struct Scenario {
     /// Savegame folder name (e.g. "savegame1") to track progress against.
     #[serde(default)]
     savegame_slot: Option<String>,
+    /// If set, the Aug–Dec warm-up window is free capital-building time and the
+    /// deadline only starts counting from the following January.
+    #[serde(default)]
+    warmup_to_january: bool,
 }
 
 fn load_scenarios(app: &AppHandle) -> Result<Vec<Scenario>, String> {
@@ -885,6 +894,10 @@ struct SaveInfo {
     years_elapsed: Option<f64>,
     /// modName of every mod this save depends on (from careerSavegame.xml).
     mods: Vec<String>,
+    /// The map's `<mapId>`, e.g. "FS25_ronidaIslandCp.ronidaIslandCP_nt". The
+    /// part before the first '.' is the map mod's zip stem — a reliable map
+    /// identity even when a mod bundles several map variants under one title.
+    map_id: Option<String>,
 }
 
 /// roxmltree errors on a leading UTF-8 BOM, which FS25's save XML files carry.
@@ -955,14 +968,23 @@ fn sum_owned_prices(path: &Path, farm_id: &str) -> f64 {
     .unwrap_or(0.0)
 }
 
-/// Approximate in-game years elapsed: 12 periods (months) make a year.
+/// FS25 new games begin in period 6 (August), so a brand-new save already sits
+/// at `currentDay = 6` (with 1 day/period). Anchor elapsed time to that start so
+/// loading a fresh game reads as 0 years, not half a year.
+const START_PERIOD: f64 = 6.0;
+
+/// Approximate in-game years elapsed since the game began: 12 periods (months)
+/// make a year, measured from the August start (never negative).
 fn years_elapsed(current_day: f64, days_per_period: f64) -> f64 {
     let dpp = if days_per_period > 0.0 {
         days_per_period
     } else {
         1.0
     };
-    current_day / (dpp * 12.0)
+    // Continuous count of periods since day 1, minus the 5 periods the calendar
+    // is already into the year at the August start.
+    let periods_elapsed = (current_day - 1.0) / dpp;
+    ((periods_elapsed - (START_PERIOD - 1.0)) / 12.0).max(0.0)
 }
 
 fn read_save(dir: &Path, slot: &str) -> Option<SaveInfo> {
@@ -1019,6 +1041,7 @@ fn read_save(dir: &Path, slot: &str) -> Option<SaveInfo> {
         play_time_hours,
         years_elapsed,
         mods,
+        map_id: text("mapId"),
     })
 }
 
@@ -1833,7 +1856,8 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
 }
 
 /// Per-map "template" saves: which savegame slot to clone from when seeding a
-/// scenario on a given map. Keyed by map title.
+/// scenario on a given map. Keyed by map identity (the map mod's zip stem, so a
+/// bundle's variants all share one template), set by the frontend.
 #[tauri::command]
 fn get_templates(app: AppHandle) -> Result<HashMap<String, String>, String> {
     let path = config_dir(&app)?.join("templates.json");
@@ -1846,12 +1870,12 @@ fn get_templates(app: AppHandle) -> Result<HashMap<String, String>, String> {
 }
 
 #[tauri::command]
-fn set_template(app: AppHandle, map_title: String, slot: String) -> Result<(), String> {
+fn set_template(app: AppHandle, map_key: String, slot: String) -> Result<(), String> {
     let mut t = get_templates(app.clone())?;
     if slot.is_empty() {
-        t.remove(&map_title);
+        t.remove(&map_key);
     } else {
-        t.insert(map_title, slot);
+        t.insert(map_key, slot);
     }
     let path = config_dir(&app)?.join("templates.json");
     let s = serde_json::to_string_pretty(&t).map_err(|e| e.to_string())?;
@@ -1877,6 +1901,209 @@ fn clone_savegame(app: AppHandle, from_slot: String, to_slot: String) -> Result<
         fs::remove_dir_all(&dst).map_err(|e| e.to_string())?;
     }
     copy_dir(&src, &dst)
+}
+
+// ---------------------------------------------------------------------------
+// Farm overview: richer per-savegame stats (vehicles, buildings, fields).
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VehicleEntry {
+    name: String,
+    value: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FarmOverview {
+    money: Option<f64>,
+    vehicle_count: usize,
+    vehicle_value: f64,
+    top_vehicles: Vec<VehicleEntry>,
+    building_count: usize,
+    building_value: f64,
+    field_count: usize,
+}
+
+#[tauri::command]
+fn farm_overview(app: AppHandle, slot: String) -> Result<FarmOverview, String> {
+    safe_filename(&slot)?;
+    let cfg = load_config(&app)?;
+    let base = game_dir(&cfg).join(&slot);
+    if !base.join("careerSavegame.xml").exists() {
+        return Err("no save in that slot".into());
+    }
+
+    let money = (|| {
+        let s = fs::read_to_string(base.join("careerSavegame.xml")).ok()?;
+        let doc = roxmltree::Document::parse(strip_bom(&s)).ok()?;
+        xml_text(&doc, "money")?.parse::<f64>().ok()
+    })();
+    let farm_id = read_player_farm(&base.join("farms.xml"), money)
+        .map(|(_, id)| id)
+        .unwrap_or_else(|| "1".into());
+
+    // Owned vehicles + their value.
+    let mut vehicles: Vec<VehicleEntry> = Vec::new();
+    if let Ok(s) = fs::read_to_string(base.join("vehicles.xml")) {
+        if let Ok(doc) = roxmltree::Document::parse(strip_bom(&s)) {
+            for n in doc.root_element().descendants() {
+                if !n.has_tag_name("vehicle") || n.attribute("farmId") != Some(farm_id.as_str()) {
+                    continue;
+                }
+                if matches!(n.attribute("propertyState"), Some(x) if x != "OWNED") {
+                    continue;
+                }
+                let value = n
+                    .attribute("price")
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(0.0);
+                let name = n
+                    .attribute("filename")
+                    .map(|f| {
+                        f.trim_end_matches(".xml")
+                            .rsplit(['/', '\\'])
+                            .next()
+                            .unwrap_or(f)
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                vehicles.push(VehicleEntry { name, value });
+            }
+        }
+    }
+    let vehicle_value: f64 = vehicles.iter().map(|v| v.value).sum();
+    let vehicle_count = vehicles.len();
+    vehicles.sort_by(|a, b| b.value.total_cmp(&a.value));
+    vehicles.truncate(8);
+
+    // Owned buildings.
+    let mut building_count = 0;
+    let mut building_value = 0.0;
+    if let Ok(s) = fs::read_to_string(base.join("placeables.xml")) {
+        if let Ok(doc) = roxmltree::Document::parse(strip_bom(&s)) {
+            for n in doc.root_element().descendants() {
+                if n.has_tag_name("placeable") && n.attribute("farmId") == Some(farm_id.as_str()) {
+                    building_count += 1;
+                    building_value += n
+                        .attribute("price")
+                        .and_then(|v| v.parse::<f64>().ok())
+                        .unwrap_or(0.0);
+                }
+            }
+        }
+    }
+
+    // Owned farmland parcels.
+    let mut field_count = 0;
+    if let Ok(s) = fs::read_to_string(base.join("farmland.xml")) {
+        if let Ok(doc) = roxmltree::Document::parse(strip_bom(&s)) {
+            field_count = doc
+                .root_element()
+                .descendants()
+                .filter(|n| {
+                    n.has_tag_name("farmland") && n.attribute("farmId") == Some(farm_id.as_str())
+                })
+                .count();
+        }
+    }
+
+    Ok(FarmOverview {
+        money,
+        vehicle_count,
+        vehicle_value,
+        top_vehicles: vehicles,
+        building_count,
+        building_value,
+        field_count,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Disk manager: library size, biggest mods, duplicate versions, orphans.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibEntry {
+    filename: String,
+    title: String,
+    size: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiskReport {
+    total_size: u64,
+    count: usize,
+    biggest: Vec<LibEntry>,
+    /// Groups of library files that share a title (likely duplicate versions).
+    duplicates: Vec<Vec<LibEntry>>,
+    /// Files in the mods folder that aren't in the library.
+    orphans: Vec<String>,
+}
+
+#[tauri::command]
+fn disk_report(app: AppHandle) -> Result<DiskReport, String> {
+    let items = scan(&app)?;
+    let total_size: u64 = items.iter().map(|i| i.size).sum();
+    let count = items.len();
+
+    let mut biggest: Vec<LibEntry> = items
+        .iter()
+        .map(|i| LibEntry {
+            filename: i.filename.clone(),
+            title: i.title.clone(),
+            size: i.size,
+        })
+        .collect();
+    biggest.sort_by_key(|b| std::cmp::Reverse(b.size));
+    biggest.truncate(10);
+
+    // Group by normalized title; any group with >1 member is a duplicate set.
+    let mut by_title: HashMap<String, Vec<LibEntry>> = HashMap::new();
+    for i in &items {
+        let key = i
+            .title
+            .to_lowercase()
+            .replace(|c: char| !c.is_alphanumeric(), "");
+        if key.is_empty() {
+            continue;
+        }
+        by_title.entry(key).or_default().push(LibEntry {
+            filename: i.filename.clone(),
+            title: i.title.clone(),
+            size: i.size,
+        });
+    }
+    let mut duplicates: Vec<Vec<LibEntry>> =
+        by_title.into_values().filter(|g| g.len() > 1).collect();
+    duplicates.sort_by(|a, b| a[0].title.to_lowercase().cmp(&b[0].title.to_lowercase()));
+
+    // Orphans: mods-folder zips not present in the library.
+    let cfg = load_config(&app)?;
+    let lib: std::collections::HashSet<String> =
+        items.iter().map(|i| i.filename.clone()).collect();
+    let mut orphans = Vec::new();
+    if let Ok(rd) = fs::read_dir(&cfg.mods_dir) {
+        for entry in rd.flatten() {
+            if is_zip(&entry.path()) {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if !lib.contains(&name) {
+                    orphans.push(name);
+                }
+            }
+        }
+    }
+
+    Ok(DiskReport {
+        total_size,
+        count,
+        biggest,
+        duplicates,
+        orphans,
+    })
 }
 
 #[cfg(test)]
@@ -1912,12 +2139,17 @@ mod tests {
 
     #[test]
     fn years_from_calendar() {
-        // 6 in-game days at 1 day/period = 6 months = 0.5 years
-        assert!((years_elapsed(6.0, 1.0) - 0.5).abs() < 1e-9);
-        // 12 periods = 1 year
-        assert!((years_elapsed(24.0, 2.0) - 1.0).abs() < 1e-9);
-        // guards against divide-by-zero
-        assert!(years_elapsed(12.0, 0.0) > 0.0);
+        // A brand-new FS25 game sits at day 6 (August start) = 0 years elapsed.
+        assert!((years_elapsed(6.0, 1.0) - 0.0).abs() < 1e-9);
+        // A full year later (12 more periods) at 1 day/period = day 18 = 1.0.
+        assert!((years_elapsed(18.0, 1.0) - 1.0).abs() < 1e-9);
+        // Same anchor holds at 2 days/period: start is day 11, +12 periods = day 35.
+        assert!((years_elapsed(11.0, 2.0) - 0.0).abs() < 1e-9);
+        assert!((years_elapsed(35.0, 2.0) - 1.0).abs() < 1e-9);
+        // Before/at the start never goes negative.
+        assert!((years_elapsed(1.0, 1.0) - 0.0).abs() < 1e-9);
+        // Divide-by-zero guard: treats 0 days/period as 1.
+        assert!(years_elapsed(30.0, 0.0) >= 0.0);
     }
 
     #[test]
@@ -1991,6 +2223,8 @@ pub fn run() {
             clone_savegame,
             get_templates,
             set_template,
+            farm_overview,
+            disk_report,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

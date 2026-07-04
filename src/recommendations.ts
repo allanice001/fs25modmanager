@@ -27,10 +27,28 @@ export const RECS: Record<string, RecMod[]> = {
     { title: "Store Deliveries", search: "store deliveries", why: "get goods delivered on a bare map" },
   ],
   scratch: [
-    { title: "EasyDevControls", search: "easy dev controls", why: "set your (low) starting money" },
+    { title: "EasyDevControls", search: "easy dev controls", why: "set your $0 start (base game floors at ~$100k)" },
     { title: "PowerTools", search: "powertools", why: "money + utilities console" },
+    { title: "Hand Tools", search: "hand tools", why: "work manually before you can afford machines" },
+    { title: "Line of Credit", search: "line of credit", why: "borrow to bootstrap during the warm-up" },
+    { title: "Better Contracts", search: "better contracts", why: "contracts are your Aug–Dec capital" },
+    { title: "Buy Used Equipment", search: "buy used equipment", why: "cheap second-hand machines to start" },
+    { title: "Universal Autoload", search: "universal autoload", why: "haul goods without expensive loaders" },
     { title: "Hire Purchasing", search: "hire purchasing", why: "lease-to-own to start with little cash" },
-    { title: "Enhanced Loan System", search: "enhanced loan system", why: "borrow to get going" },
+    { title: "Sell Anywhere", search: "sell anywhere", why: "turn early harvests into cash on a bare map" },
+    { title: "Mow Anywhere", search: "mow anywhere", why: "earn from grass before you own fields" },
+  ],
+  // Earn-every-dollar grind: no money cheats, tough economy, contracts + used gear.
+  grind: [
+    { title: "Better Contracts", search: "better contracts", why: "your main income — more, fairer jobs" },
+    { title: "Contracts Booster", search: "contracts booster", why: "bigger rewards + bonuses for using owned gear" },
+    { title: "Sell Anywhere", search: "sell anywhere", why: "sell produce without hauling to base points" },
+    { title: "Mow Anywhere", search: "mow anywhere", why: "early grass income while cash is tight" },
+    { title: "Buy Used Equipment", search: "buy used equipment", why: "second-hand machines keep costs down" },
+    { title: "Hire Purchasing", search: "hire purchasing", why: "lease-to-own instead of a big cash outlay" },
+    { title: "Universal Autoload", search: "universal autoload", why: "haul efficiently with a minimal fleet" },
+    { title: "MoreRealistic", search: "morerealistic", why: "tougher economy so the grind means something" },
+    { title: "Advanced Damage System", search: "advanced damage system", why: "upkeep costs keep the pressure on" },
   ],
   // --- generator themes ---
   livestock: [

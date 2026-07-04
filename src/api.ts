@@ -35,6 +35,40 @@ export interface ModItem {
   incompatReasons: string[];
   size: number;
   error: string | null;
+  description: string;
+  /** Mod names (zip stems) this mod depends on, from modDesc.xml. */
+  dependencies: string[];
+}
+
+export interface VehicleEntry {
+  name: string;
+  value: number;
+}
+
+export interface FarmOverview {
+  money: number | null;
+  vehicleCount: number;
+  vehicleValue: number;
+  topVehicles: VehicleEntry[];
+  buildingCount: number;
+  buildingValue: number;
+  fieldCount: number;
+}
+
+export interface LibEntry {
+  filename: string;
+  title: string;
+  size: number;
+}
+
+export interface DiskReport {
+  totalSize: number;
+  count: number;
+  biggest: LibEntry[];
+  /** Groups of library files sharing a title (likely duplicate versions). */
+  duplicates: LibEntry[][];
+  /** Files in the mods folder not present in the library. */
+  orphans: string[];
 }
 
 export interface Scenario {
@@ -50,6 +84,8 @@ export interface Scenario {
   goalMoney: number | null;
   deadlineYears: number | null;
   savegameSlot: string | null;
+  /** Aug–Dec is a free warm-up window; the deadline counts from January. */
+  warmupToJanuary?: boolean;
 }
 
 export interface SaveInfo {
@@ -62,6 +98,9 @@ export interface SaveInfo {
   playTimeHours: number | null;
   yearsElapsed: number | null;
   mods: string[];
+  /** `<mapId>` e.g. "FS25_ronidaIslandCp.ronidaIslandCP_nt"; the prefix before
+   *  the first '.' is the map mod's zip stem (reliable map identity). */
+  mapId?: string | null;
 }
 
 export interface ModHubEntry {
@@ -169,8 +208,11 @@ export const api = {
   cloneSavegame: (fromSlot: string, toSlot: string) =>
     invoke<void>("clone_savegame", { fromSlot, toSlot }),
   getTemplates: () => invoke<Record<string, string>>("get_templates"),
-  setTemplate: (mapTitle: string, slot: string) =>
-    invoke<void>("set_template", { mapTitle, slot }),
+  setTemplate: (mapKey: string, slot: string) =>
+    invoke<void>("set_template", { mapKey, slot }),
+  farmOverview: (slot: string) =>
+    invoke<FarmOverview>("farm_overview", { slot }),
+  diskReport: () => invoke<DiskReport>("disk_report"),
   syncStatus: () => invoke<SyncStatus>("sync_status"),
   syncSetup: (name: string) => invoke<string>("sync_setup", { name }),
   syncPush: () => invoke<string>("sync_push"),

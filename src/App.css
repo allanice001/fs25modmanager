@@ -840,3 +840,209 @@ main {
 .gen-preview b {
   color: var(--text);
 }
+
+/* ---- Dependency chips (cards + detail modal) ---- */
+.deps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+}
+.deps-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.dep-chip {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  white-space: nowrap;
+}
+.dep-chip.ok {
+  border-color: var(--accent-dk);
+  color: var(--accent);
+}
+.dep-chip.missing {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+/* ---- Detail modal ---- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 16px;
+  z-index: 50;
+  overflow-y: auto;
+}
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px 20px;
+  max-width: 560px;
+  width: 100%;
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.modal-head h2 {
+  font-size: 18px;
+  margin: 0;
+  flex: 1;
+}
+.modal-x {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+}
+.modal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 10px 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.modal-meta b {
+  color: var(--text);
+  font-weight: 600;
+  margin-right: 4px;
+}
+.modal-desc {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.modal-section {
+  margin-top: 14px;
+}
+.modal-section h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.dep-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* ---- Farm overview (Saves) ---- */
+.farm-overview {
+  border-top: 1px solid var(--line);
+  padding: 10px 12px;
+}
+.farm-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+.farm-vehicles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+/* ---- Disk manager ---- */
+.disk-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+  min-width: 96px;
+}
+.stat-num {
+  font-size: 20px;
+  font-weight: 700;
+}
+.stat-lbl {
+  font-size: 12px;
+  color: var(--muted);
+}
+.disk-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.disk-bar-row {
+  display: grid;
+  grid-template-columns: 1fr 200px auto;
+  gap: 10px;
+  align-items: center;
+  font-size: 13px;
+}
+.disk-bar-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.disk-bar-track {
+  background: var(--panel-2);
+  border-radius: 4px;
+  height: 10px;
+  overflow: hidden;
+}
+.disk-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--map);
+}
+.disk-bar-size {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.dup-group {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.dup-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.dup-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-size: 13px;
+  padding: 2px 0;
+}
+.dup-row .muted {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.orphan-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}

@@ -89,6 +89,13 @@ export const THEMES: Theme[] = [
     kit: "A basic tillage + harvest chain",
     noun: "Harvest",
   },
+  {
+    id: "grind",
+    label: "Grind",
+    keywords: ["contract", "used", "autoload", "sell", "mow", "realistic", "economy", "loan", "credit", "hire"],
+    kit: "Contracts + used gear + sell-anywhere — earn every dollar",
+    noun: "Grind",
+  },
 ];
 
 export const themeById = (id: string) =>
@@ -182,5 +189,7 @@ export function generateScenario(opts: GenOptions, items: ModItem[]): Scenario {
     goalMoney: cfg.goal,
     deadlineYears: cfg.deadline,
     savegameSlot: null,
+    // Grind runs give away the Aug–Dec warm-up, matching the Grind mode.
+    warmupToJanuary: theme.id === "grind",
   };
 }

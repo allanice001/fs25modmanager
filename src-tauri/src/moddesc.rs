@@ -11,6 +11,9 @@ pub struct ModDesc {
     pub author: String,
     pub version: String,
     pub is_map: bool,
+    pub description: String,
+    /// Mod names this mod depends on (each matches another mod's zip stem).
+    pub dependencies: Vec<String>,
 }
 
 /// Open `zip_path`, locate `modDesc.xml` and parse the useful bits.
@@ -40,6 +43,10 @@ pub fn parse(zip_path: &Path) -> Result<ModDesc, String> {
 }
 
 fn parse_xml(raw: &str) -> Result<ModDesc, String> {
+    // Some modDesc files carry a UTF-8 BOM (and/or leading whitespace) before
+    // the XML declaration; strip it so both the prolog check below and roxmltree
+    // see `<?xml`/`<` at the very start. (Ronîda Island ships one, for example.)
+    let raw = raw.trim_start_matches('\u{feff}').trim_start();
     // roxmltree operates on an already-decoded &str, so a `<?xml encoding=...?>`
     // prolog that disagrees with our lossy UTF-8 decode would make it error.
     // Drop the prolog before parsing.
@@ -94,11 +101,44 @@ fn parse_xml(raw: &str) -> Result<ModDesc, String> {
         .map(|m| m.children().any(|c| c.has_tag_name("map")))
         .unwrap_or(false);
 
+    // <description> has language children like <title>; prefer English.
+    let description = root
+        .children()
+        .find(|n| n.has_tag_name("description"))
+        .map(|d| {
+            let en = d
+                .children()
+                .find(|n| n.has_tag_name("en"))
+                .and_then(|n| n.text());
+            let first = d.children().find(|n| n.is_element()).and_then(|n| n.text());
+            en.or(first)
+                .or_else(|| d.text())
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        })
+        .unwrap_or_default();
+
+    // <dependencies><dependency>ModName</dependency>…</dependencies>
+    let dependencies = root
+        .children()
+        .find(|n| n.has_tag_name("dependencies"))
+        .map(|deps| {
+            deps.children()
+                .filter(|n| n.has_tag_name("dependency"))
+                .filter_map(|n| n.text().map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
     Ok(ModDesc {
         title,
         author: text_of("author"),
         version: text_of("version"),
         is_map,
+        description,
+        dependencies,
     })
 }
 
@@ -150,5 +190,20 @@ mod tests {
         // a latin-1 declaration must not break parsing (prolog is stripped)
         let xml = "<?xml version=\"1.0\" encoding=\"iso-8859-1\"?><modDesc><title><en>X</en></title></modDesc>";
         assert_eq!(parse_xml(xml).unwrap().title, "X");
+    }
+
+    #[test]
+    fn handles_leading_bom_and_multi_map() {
+        // A UTF-8 BOM before the prolog (like Ronîda Island) must not stop the
+        // map from being detected, even when several <map> variants are bundled.
+        let xml = "\u{feff}<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<modDesc>\
+            <title><en>Ronîda Island</en></title>\
+            <maps>\
+              <map id=\"a\" configFilename=\"map/map.xml\"/>\
+              <map id=\"a_nt\" configFilename=\"map/map_nt.xml\"/>\
+            </maps></modDesc>";
+        let d = parse_xml(xml).unwrap();
+        assert_eq!(d.title, "Ronîda Island");
+        assert!(d.is_map);
     }
 }

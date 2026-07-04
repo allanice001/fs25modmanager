@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { api, BackupInfo, SaveInfo, SlotInfo } from "./api";
+import { api, BackupInfo, FarmOverview, SaveInfo, SlotInfo } from "./api";
+import { mapKeyOfSave } from "./mapId";
 
 const money = (n: number) => "$" + Math.round(n).toLocaleString();
 const fmtSize = (b: number) =>
@@ -36,9 +37,10 @@ export default function Saves({
   }
 
   async function toggleTemplate(s: SaveInfo) {
-    const isTpl = templates[s.mapTitle] === s.slot;
+    const key = mapKeyOfSave(s);
+    const isTpl = templates[key] === s.slot;
     try {
-      await api.setTemplate(s.mapTitle, isTpl ? "" : s.slot);
+      await api.setTemplate(key, isTpl ? "" : s.slot);
       setMsg(
         isTpl
           ? `Cleared template for ${s.mapTitle}`
@@ -167,7 +169,7 @@ export default function Saves({
           save={s}
           slots={slots}
           busy={busy}
-          isTemplate={templates[s.mapTitle] === s.slot}
+          isTemplate={templates[mapKeyOfSave(s)] === s.slot}
           onToggleTemplate={() => toggleTemplate(s)}
           onBackup={() => backup(s.slot)}
           onSetMoney={(v) => setMoney(s.slot, v)}
@@ -228,6 +230,25 @@ function SaveCard({
   const [cloneTo, setCloneTo] = useState("");
   const net = s.money != null ? s.money + (s.assetValue ?? 0) - (s.loan ?? 0) : null;
   const working = busy?.startsWith(s.slot);
+
+  // Lazily-loaded farm overview (vehicles/buildings/fields).
+  const [farm, setFarm] = useState<FarmOverview | null>(null);
+  const [farmOpen, setFarmOpen] = useState(false);
+  const [farmErr, setFarmErr] = useState<string | null>(null);
+  async function toggleFarm() {
+    if (farmOpen) {
+      setFarmOpen(false);
+      return;
+    }
+    setFarmOpen(true);
+    if (farm) return;
+    try {
+      setFarm(await api.farmOverview(s.slot));
+      setFarmErr(null);
+    } catch (e) {
+      setFarmErr(String(e));
+    }
+  }
 
   return (
     <div className="card scenario">
@@ -312,8 +333,49 @@ function SaveCard({
           <button className="btn" disabled={!!working} onClick={onBackup}>
             {working ? "…" : "⬇ Back up"}
           </button>
+          <button className="btn ghost" onClick={toggleFarm}>
+            {farmOpen ? "▲ Farm" : "🚜 Farm ▾"}
+          </button>
         </div>
       </div>
+
+      {farmOpen && (
+        <div className="farm-overview">
+          {farmErr && <div className="warn">{farmErr}</div>}
+          {!farm && !farmErr && <span className="muted">Reading save…</span>}
+          {farm && (
+            <>
+              <div className="farm-stats">
+                <span className="track">
+                  <b>Vehicles</b> {farm.vehicleCount}
+                </span>
+                <span className="track">
+                  <b>Fleet value</b> {money(farm.vehicleValue)}
+                </span>
+                <span className="track">
+                  <b>Buildings</b> {farm.buildingCount}
+                </span>
+                <span className="track">
+                  <b>Building value</b> {money(farm.buildingValue)}
+                </span>
+                <span className="track">
+                  <b>Fields owned</b> {farm.fieldCount}
+                </span>
+              </div>
+              {farm.topVehicles.length > 0 && (
+                <div className="farm-vehicles">
+                  <span className="st-label">Most valuable:</span>
+                  {farm.topVehicles.map((v, i) => (
+                    <span key={i} className="dep-chip" title={money(v.value)}>
+                      {v.name} · {money(v.value)}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

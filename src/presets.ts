@@ -1,5 +1,5 @@
 import { ModItem, SaveInfo, Scenario } from "./api";
-import { recommendedOwned } from "./recommendations";
+import { RecMod, recommendedOwned } from "./recommendations";
 
 /** A scenario rule, evaluated live against a linked savegame. */
 export interface Rule {
@@ -7,6 +7,11 @@ export interface Rule {
   label: string;
   /** true = passing, false = failing, null = can't tell (no save data). */
   check: (s: SaveInfo) => boolean | null;
+  /** A mod that makes this rule meaningful/practical, if any. The editor
+   *  offers to add or download it when the rule is selected. */
+  needsMod?: RecMod;
+  /** Short in-game guidance on how to satisfy the rule. */
+  hint?: string;
 }
 
 export const RULES: Rule[] = [
@@ -14,6 +19,12 @@ export const RULES: Rule[] = [
     id: "must-have-debt",
     label: "Carry a line of credit (debt > 0)",
     check: (s) => (s.loan == null ? null : s.loan > 0),
+    needsMod: {
+      title: "Line of Credit",
+      search: "line of credit",
+      why: "raises your credit limit so running on debt is meaningful",
+    },
+    hint: "You can borrow at the bank in the base game, but a loan mod raises the ceiling and makes a credit run interesting.",
   },
   {
     id: "debt-free",
@@ -34,6 +45,12 @@ export interface Preset {
   rules: string[];
   mapKeywords: string[];
   modKeywords: string[];
+  /** Starting money to stamp (e.g. 0 for a from-scratch grind). */
+  startMoney?: number | null;
+  /** Give the Aug–Dec window free; deadline counts from January. */
+  warmupToJanuary?: boolean;
+  /** Override the auto-generated starting-kit note. */
+  startingKit?: string;
 }
 
 export const PRESETS: Preset[] = [
@@ -66,13 +83,33 @@ export const PRESETS: Preset[] = [
   },
   {
     id: "scratch",
-    name: "From Scratch",
-    description: "Minimal start, grow a farm the honest way.",
+    name: "From Scratch (zero start)",
+    description:
+      "Start-From-Scratch grind: $0, no land, only a base truck + hand tools. Aug–Dec is a free warm-up to build capital from contracts; the deadline clock starts in January.",
     goalMoney: 500_000,
     deadlineYears: 8,
     rules: [],
     mapKeywords: [],
     modKeywords: [],
+    startMoney: 0,
+    warmupToJanuary: true,
+    startingKit:
+      "Keep only a base pickup/truck + hand tools; sell everything else. Seed a true zero-asset save: in FS25 start a New Game → economic difficulty ‘Start From Scratch’, save immediately, then ⭐ it as this map’s template.",
+  },
+  {
+    id: "grind",
+    name: "Grind",
+    description:
+      "Earn every dollar — start at $0, no money cheats, tough economy, income from contracts, used gear and selling anywhere. Aug–Dec warm-up, then the clock runs to a million.",
+    goalMoney: 1_000_000,
+    deadlineYears: 10,
+    rules: [],
+    mapKeywords: [],
+    modKeywords: [],
+    startMoney: 0,
+    warmupToJanuary: true,
+    startingKit:
+      "No console money — earn it. Lean on contracts, second-hand equipment and sell-anywhere to build capital, and let a realistic economy keep the pressure on.",
   },
 ];
 
@@ -127,12 +164,15 @@ export function scenarioFromPreset(preset: Preset, items: ModItem[]): Scenario {
     rules: preset.rules,
     map,
     requiredMods: withMoneyMod(requiredMods, items),
-    startingKit: moneyControlMod(items)
-      ? "Use EasyDevControls/PowerTools to set your starting money."
-      : "",
-    startMoney: null,
+    startingKit:
+      preset.startingKit ??
+      (moneyControlMod(items)
+        ? "Use EasyDevControls/PowerTools to set your starting money."
+        : ""),
+    startMoney: preset.startMoney ?? null,
     goalMoney: preset.goalMoney,
     deadlineYears: preset.deadlineYears,
     savegameSlot: null,
+    warmupToJanuary: preset.warmupToJanuary ?? false,
   };
 }

@@ -42,6 +42,25 @@ export async function modhubSearch(term: string): Promise<ModHubEntry[]> {
   return parseModhub(await res.text(), "");
 }
 
+const MAP_CATEGORIES = [
+  "mapEurope",
+  "mapNorthAmerica",
+  "mapSouthAmerica",
+  "mapOthers",
+];
+
+/** Fetch a live page of ModHub maps from a random map category — used by the
+ *  "fully random" generator when the local cache has no maps cached yet. */
+export async function modhubMapsLive(): Promise<ModHubEntry[]> {
+  const cat = MAP_CATEGORIES[Math.floor(Math.random() * MAP_CATEGORIES.length)];
+  const res = await httpFetch(modhubUrl(cat, "", 0), {
+    method: "GET",
+    headers: { "User-Agent": UA },
+  });
+  if (!res.ok) return [];
+  return parseModhub(await res.text(), cat);
+}
+
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 // The CDN blocks hot-linked images (no farming-simulator.com Referer), so the

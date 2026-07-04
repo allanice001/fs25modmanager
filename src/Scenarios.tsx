@@ -16,7 +16,8 @@ import {
   withMoneyMod,
 } from "./presets";
 import { RecMod, ownedMatch, recsFor } from "./recommendations";
-import { modhubSearch } from "./ModHub";
+import { modhubSearch, modhubMapsLive } from "./ModHub";
+import { saveMapStem, fileStem, mapKeyOfFile, saveOnMap } from "./mapId";
 import {
   DIFFICULTIES,
   Difficulty,
@@ -29,6 +30,10 @@ import {
 const money = (n: number) =>
   "$" + Math.round(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
 
+// FS25 games start in August (period 6); the following January is 5 periods
+// later. A warm-up scenario gives those Aug–Dec months away free.
+const WARMUP_YEARS = 5 / 12;
+
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 /** Reverse-engineer a scenario from an existing savegame: its map, mod list,
@@ -37,7 +42,9 @@ function scenarioFromSave(save: SaveInfo, items: ModItem[]): Scenario {
   const maps = items.filter((i) => i.kind === "map");
   const mods = items.filter((i) => i.kind === "mod");
 
+  const stem = saveMapStem(save);
   const mapItem =
+    (stem ? maps.find((m) => fileStem(m.filename) === stem) : undefined) ??
     maps.find((m) => norm(m.title) === norm(save.mapTitle)) ??
     maps.find(
       (m) => save.mapTitle && norm(m.filename).includes(norm(save.mapTitle)),
@@ -149,6 +156,17 @@ export default function Scenarios({
   // Create a savegame for a scenario: clone a source save (same map) into a
   // target slot, then stamp the scenario's money + name onto it.
   async function seedSave(scenario: Scenario, from: string, to: string) {
+    // A from-scratch scenario expects the source to be a true zero-asset save
+    // (made via FS25's "Start From Scratch"). Warn if it clearly isn't.
+    const zeroStart = scenario.mode === "scratch" || !!scenario.warmupToJanuary;
+    const src = saves.find((s) => s.slot === from);
+    if (zeroStart && src && (src.assetValue ?? 0) > 50_000) {
+      const ok = await ask(
+        `${from} holds ~${money(src.assetValue ?? 0)} in assets, so the seeded save won't be a zero start. For a true from-scratch run, start a New Game in FS25 with "Start From Scratch", save it, ⭐ it as this map's template, then seed from that.\n\nSeed from ${from} anyway?`,
+        { title: "Not a zero-asset save", kind: "warning" },
+      );
+      if (!ok) return;
+    }
     const target = slots.find((s) => s.slot === to);
     if (target?.occupied) {
       const ok = await ask(
@@ -281,7 +299,14 @@ export default function Scenarios({
           s.goalMoney && cur != null
             ? Math.max(0, Math.min(100, (cur / s.goalMoney) * 100))
             : null;
-        const yrs = save?.yearsElapsed ?? null;
+        const rawYrs = save?.yearsElapsed ?? null;
+        // With a warm-up window, the clock only starts the following January.
+        const inWarmup =
+          rawYrs != null && !!s.warmupToJanuary && rawYrs < WARMUP_YEARS;
+        const yrs =
+          rawYrs != null && s.warmupToJanuary
+            ? Math.max(0, rawYrs - WARMUP_YEARS)
+            : rawYrs;
         const debt = save?.loan ?? null;
         const assets = save?.assetValue ?? null;
         const net =
@@ -379,6 +404,19 @@ export default function Scenarios({
                     })}
                   </div>
                 )}
+                {s.rules
+                  .map((rid) => ruleById(rid))
+                  .filter((r) => r?.needsMod)
+                  .filter((r) => {
+                    const owned = ownedMatch(r!.needsMod!, mods);
+                    return !owned || !s.requiredMods.includes(owned.filename);
+                  })
+                  .map((r) => (
+                    <div key={r!.id} className="warn">
+                      ⚠ “{r!.label}” has no {r!.needsMod!.title} mod in this
+                      scenario’s kit — Edit to add one.
+                    </div>
+                  ))}
 
                 {s.deadlineYears != null && (
                   <div
@@ -387,7 +425,12 @@ export default function Scenarios({
                       (overDeadline && !goalReached ? "over" : "ok")
                     }
                   >
-                    {yrs != null ? (
+                    {inWarmup ? (
+                      <>
+                        🌱 Warm-up (Aug–Dec) — build capital; the {s.deadlineYears}
+                        -year clock starts in January.
+                      </>
+                    ) : yrs != null ? (
                       <>
                         ⏱ Year {yrs.toFixed(1)} of {s.deadlineYears}
                         {goalReached
@@ -395,9 +438,13 @@ export default function Scenarios({
                           : overDeadline
                             ? " — deadline passed ✗"
                             : ` (${Math.max(0, s.deadlineYears - yrs).toFixed(1)} yrs left)`}
+                        {s.warmupToJanuary && " · counted from Jan"}
                       </>
                     ) : (
-                      <>⏱ Deadline: {s.deadlineYears} in-game years</>
+                      <>
+                        ⏱ Deadline: {s.deadlineYears} in-game years
+                        {s.warmupToJanuary && " (from January)"}
+                      </>
                     )}
                   </div>
                 )}
@@ -420,10 +467,11 @@ export default function Scenarios({
                 />
                 <SeedButton
                   scenario={s}
+                  mapFile={s.map}
                   mapTitle={s.map ? titleOf(s.map) : ""}
                   saves={saves}
                   slots={slots}
-                  templateSlot={s.map ? templates[titleOf(s.map)] : undefined}
+                  templateSlot={s.map ? templates[mapKeyOfFile(s.map)] : undefined}
                   busy={busy}
                   onSeed={(from, to) => seedSave(s, from, to)}
                 />
@@ -480,6 +528,7 @@ function ApplyButton({
 
 function SeedButton({
   scenario,
+  mapFile,
   mapTitle,
   saves,
   slots,
@@ -488,6 +537,7 @@ function SeedButton({
   onSeed,
 }: {
   scenario: Scenario;
+  mapFile: string | null;
   mapTitle: string;
   saves: SaveInfo[];
   slots: SlotInfo[];
@@ -496,10 +546,12 @@ function SeedButton({
   onSeed: (from: string, to: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  // Saves on the scenario's map (clone can't change a save's map).
-  const sameMap = mapTitle
-    ? saves.filter((s) => norm(s.mapTitle) === norm(mapTitle))
-    : saves;
+  // Saves on the scenario's map (clone can't change a save's map). Match by the
+  // map mod's identity so bundled variants (e.g. Ronîda "No Trees") still line up.
+  const sameMap =
+    mapFile || mapTitle
+      ? saves.filter((s) => saveOnMap(s, mapFile, mapTitle))
+      : saves;
   // Default the source to the designated template, else the first same-map save.
   const [from, setFrom] = useState(
     templateSlot && sameMap.some((s) => s.slot === templateSlot)
@@ -864,6 +916,22 @@ function Editor({
       </div>
 
       <label className="field">
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={!!d.warmupToJanuary}
+            onChange={(e) => set({ warmupToJanuary: e.target.checked })}
+          />
+          Warm-up window (Aug–Dec free)
+        </label>
+        <span className="hint">
+          FS25 starts in August. With this on, the first Aug–Dec is free time to
+          build capital (contracts, odd jobs) and the deadline clock only starts
+          the following <b>January</b>. Pair with a $0 start for a true grind.
+        </span>
+      </label>
+
+      <label className="field">
         <span className="field-head">
           <span>Track progress from savegame</span>
           <button
@@ -896,7 +964,7 @@ function Editor({
         Rules (tracked against the savegame, not enforced in-game)
         <div className="mod-picker short">
           {RULES.map((r) => (
-            <label key={r.id} className="pick-row">
+            <label key={r.id} className="pick-row" title={r.hint ?? ""}>
               <input
                 type="checkbox"
                 checked={d.rules.includes(r.id)}
@@ -907,6 +975,68 @@ function Editor({
           ))}
         </div>
       </div>
+
+      {/* A selected rule that needs a supporting mod (e.g. a loan mod for the
+          "carry a line of credit" rule) — offer to add or download one. */}
+      {d.rules.map((rid) => {
+        const rule = ruleById(rid);
+        const rec = rule?.needsMod;
+        if (!rule || !rec) return null;
+        const owned = ownedMatch(rec, mods);
+        const inKit = !!owned && d.requiredMods.includes(owned.filename);
+        if (inKit) return null;
+        const results = recResults[rec.title] ?? [];
+        return (
+          <div key={rid} className="field">
+            <div className="warn">⚠ “{rule.label}” — {rule.hint}</div>
+            <div className="hubmap-row" title={rec.why}>
+              <span className={owned ? "" : "muted"}>
+                {owned ? "○ " : "⬇ "}
+                <b>{rec.title}</b>
+                <span className="rec-why"> — {recMsg[rec.title] ?? rec.why}</span>
+              </span>
+              {owned ? (
+                <button
+                  type="button"
+                  className="btn ghost sm"
+                  onClick={() =>
+                    set({ requiredMods: [...d.requiredMods, owned.filename] })
+                  }
+                >
+                  Add to kit
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn ghost sm"
+                  disabled={dl !== null}
+                  onClick={() => searchRec(rec)}
+                >
+                  {dl === rec.title ? "Searching…" : "🔍 Find on ModHub"}
+                </button>
+              )}
+            </div>
+            {results.length > 0 && (
+              <div className="rec-results">
+                {results.map((e) => (
+                  <button
+                    key={e.modId}
+                    type="button"
+                    className="rec-result"
+                    disabled={dl !== null}
+                    title={`by ${e.author}`}
+                    onClick={() => pickResult(rec.title, e)}
+                  >
+                    {dl === e.modId ? "⏳ " : "⬇ "}
+                    {e.title}
+                    {e.author && <span className="rec-why"> · {e.author}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
 
       <div className="editor-actions">
         <button
@@ -971,6 +1101,34 @@ function GeneratorPanel({
       onGenerate(scenario);
     } catch (err) {
       setError(`Couldn't download ${e.title}: ${err}`);
+    } finally {
+      setDl(null);
+    }
+  }
+
+  // Fully random: roll every knob AND the map — pulling a fresh map off ModHub
+  // (downloading it) even if none is cached or in the library.
+  async function fullRandom() {
+    setError(null);
+    setDl("full");
+    try {
+      let pool = hubMaps;
+      if (pool.length === 0) pool = await modhubMapsLive();
+      if (pool.length === 0) {
+        // No ModHub maps reachable — fall back to a library-only surprise.
+        surprise();
+        return;
+      }
+      const pick = pool[Math.floor(Math.random() * pool.length)];
+      const filename = await api.downloadMod(pick.modId);
+      onLibraryChanged();
+      const scenario = generateScenario(randomOptions(items), items);
+      scenario.map = filename;
+      scenario.description =
+        `${scenario.description} Map: ${pick.title} (fresh from ModHub).`.trim();
+      onGenerate(scenario);
+    } catch (err) {
+      setError(`Fully-random roll failed: ${err}`);
     } finally {
       setDl(null);
     }
@@ -1072,13 +1230,21 @@ function GeneratorPanel({
       </div>
 
       <div className="editor-actions">
-        <button className="btn on" onClick={roll}>
+        <button className="btn on" onClick={roll} disabled={dl !== null}>
           Generate
         </button>
-        <button className="btn" onClick={surprise}>
+        <button className="btn" onClick={surprise} disabled={dl !== null}>
           🎲 Surprise me
         </button>
-        <button className="btn ghost" onClick={onCancel}>
+        <button
+          className="btn"
+          onClick={fullRandom}
+          disabled={dl !== null}
+          title="Roll everything — including a fresh map downloaded from ModHub, even if you have none in your library."
+        >
+          {dl === "full" ? "Rolling…" : "🌐 Fully random"}
+        </button>
+        <button className="btn ghost" onClick={onCancel} disabled={dl !== null}>
           Cancel
         </button>
       </div>
