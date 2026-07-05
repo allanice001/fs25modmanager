@@ -26,6 +26,13 @@
       ],
       "matchUpdateTypes": ["major"],
       "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Pin tauri-action to v0: v1 emits api.github.com asset URLs in latest.json that break our public-mirror rewrite (verified on a throwaway tag). Revisit only with a mirror-job rewrite.",
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["tauri-apps/tauri-action"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
     }
   ]
 }

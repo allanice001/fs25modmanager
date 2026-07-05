@@ -1303,9 +1303,37 @@ fn clean_from_mods(cfg: &Config, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The bundled companion mod, kept active during every scenario so the in-game
+/// telemetry mod is always present.
+const COMPANION_MOD: &str = "FS25_ScenarioCompanion.zip";
+
+/// Path to the bundled companion mod zip inside the app's resources, if present.
+fn companion_resource(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .resolve(
+            "resources/FS25_ScenarioCompanion.zip",
+            tauri::path::BaseDirectory::Resource,
+        )
+        .ok()
+        .filter(|p| p.exists())
+}
+
+/// Copy the bundled companion mod into the game's mods folder (overwriting, so
+/// updates propagate). Best-effort: no-ops if the resource is absent (e.g. a dev
+/// build without bundled resources).
+fn place_companion(app: &AppHandle, cfg: &Config) -> Result<(), String> {
+    let Some(src) = companion_resource(app) else {
+        return Ok(());
+    };
+    fs::create_dir_all(&cfg.mods_dir).ok();
+    let dst = PathBuf::from(&cfg.mods_dir).join(COMPANION_MOD);
+    fs::copy(&src, &dst).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Configure the game to match a scenario: enable its map + required mods, set
 /// the active map, and (if `exclusive`) disable everything else in the mods
-/// folder for a clean slate.
+/// folder for a clean slate. The telemetry companion mod is always kept active.
 #[tauri::command]
 fn apply_scenario(app: AppHandle, id: String, exclusive: bool) -> Result<(), String> {
     let list = load_scenarios(&app)?;
@@ -1332,7 +1360,7 @@ fn apply_scenario(app: AppHandle, id: String, exclusive: bool) -> Result<(), Str
         if let Ok(entries) = fs::read_dir(&cfg.mods_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().into_owned();
-                if is_zip(&entry.path()) && !keep.contains(&name) {
+                if is_zip(&entry.path()) && !keep.contains(&name) && name != COMPANION_MOD {
                     clean_from_mods(&cfg, &name)?;
                 }
             }
@@ -1342,6 +1370,8 @@ fn apply_scenario(app: AppHandle, id: String, exclusive: bool) -> Result<(), Str
     for f in &keep {
         apply_enabled(&cfg, f, true)?;
     }
+    // The telemetry companion is always active during a scenario.
+    place_companion(&app, &cfg)?;
 
     cfg.active_map = scenario.map.clone();
     write_config(&app, &cfg)?;
