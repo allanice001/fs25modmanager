@@ -94,7 +94,7 @@ export const PRESETS: Preset[] = [
     startMoney: 0,
     warmupToJanuary: true,
     startingKit:
-      "Keep only a base pickup/truck + hand tools; sell everything else. Seed a true zero-asset save: in FS25 start a New Game → economic difficulty ‘Start From Scratch’, save immediately, then ⭐ it as this map’s template.",
+      "FS25 ‘Start From Scratch’ gives no road truck — lease a cheap pickup (or grab one via Buy Used Equipment) and lean on hand tools + contracts to get going. Seed a true zero-asset save: in FS25 start a New Game → ‘Start From Scratch’ (Start Farm: No), save immediately, then ⭐ it as this map’s template.",
   },
   {
     id: "grind",
