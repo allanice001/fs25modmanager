@@ -1046,3 +1046,17 @@ main {
   gap: 6px;
   margin-bottom: 10px;
 }
+
+/* ---- Scenario share modal ---- */
+.share-box {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  resize: vertical;
+  white-space: pre;
+  overflow-x: auto;
+}

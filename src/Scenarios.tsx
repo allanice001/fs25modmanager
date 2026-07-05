@@ -18,6 +18,7 @@ import {
 import { RecMod, ownedMatch, recsFor } from "./recommendations";
 import { modhubSearch, modhubMapsLive } from "./ModHub";
 import { saveMapStem, fileStem, mapKeyOfFile, saveOnMap } from "./mapId";
+import { buildScenarioShare } from "./export";
 import {
   DIFFICULTIES,
   Difficulty,
@@ -111,6 +112,8 @@ export default function Scenarios({
   const [saves, setSaves] = useState<SaveInfo[]>([]);
   const [slots, setSlots] = useState<SlotInfo[]>([]);
   const [templates, setTemplates] = useState<Record<string, string>>({});
+  const [catalog, setCatalog] = useState<ModHubEntry[]>([]);
+  const [shareText, setShareText] = useState<string | null>(null);
   const [editing, setEditing] = useState<Scenario | null>(null);
   const [generating, setGenerating] = useState(false);
   const [pickingSave, setPickingSave] = useState(false);
@@ -122,16 +125,18 @@ export default function Scenarios({
 
   async function reload() {
     try {
-      const [s, sg, sl, tpl] = await Promise.all([
+      const [s, sg, sl, tpl, cat] = await Promise.all([
         api.listScenarios(),
         api.listSavegames(),
         api.listSlots(),
         api.getTemplates(),
+        api.modhubAll(), // ModHub catalog for share links (empty until fetched)
       ]);
       setScenarios(s);
       setSaves(sg);
       setSlots(sl);
       setTemplates(tpl);
+      setCatalog(cat);
     } catch (e) {
       setError(String(e));
     }
@@ -481,6 +486,14 @@ export default function Scenarios({
                 <button
                   className="btn ghost sm"
                   disabled={busy}
+                  title="Copy a shareable text summary (map, mods, rules) with links"
+                  onClick={() => setShareText(buildScenarioShare(s, items, catalog))}
+                >
+                  🔗 Share
+                </button>
+                <button
+                  className="btn ghost sm"
+                  disabled={busy}
                   onClick={() => setEditing(s)}
                 >
                   Edit
@@ -497,6 +510,60 @@ export default function Scenarios({
           </div>
         );
       })}
+
+      {shareText !== null && (
+        <ShareModal text={shareText} onClose={() => setShareText(null)} />
+      )}
+    </div>
+  );
+}
+
+function ShareModal({
+  text,
+  onClose,
+}: {
+  text: string;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked — the textarea is selectable as a fallback */
+    }
+  }
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h2>Share scenario</h2>
+          <button className="modal-x" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <p className="hint">
+          Paste into a video description, forum post or Discord. ModHub links
+          appear for mods in your catalog (fetch categories in Discover for more).
+        </p>
+        <textarea
+          className="share-box"
+          readOnly
+          value={text}
+          rows={14}
+          onFocus={(e) => e.currentTarget.select()}
+        />
+        <div className="editor-actions">
+          <button className="btn on" onClick={copy}>
+            {copied ? "Copied ✓" : "📋 Copy"}
+          </button>
+          <button className="btn ghost" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
