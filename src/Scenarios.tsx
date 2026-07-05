@@ -35,6 +35,10 @@ const money = (n: number) =>
 // later. A warm-up scenario gives those Aug–Dec months away free.
 const WARMUP_YEARS = 5 / 12;
 
+/** What to do with the seeded save's equipment: keep it, keep only a base
+ *  vehicle, or remove all owned vehicles for a bare start. */
+type EquipMode = "keep" | "base" | "none";
+
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 /** Reverse-engineer a scenario from an existing savegame: its map, mod list,
@@ -114,6 +118,7 @@ export default function Scenarios({
   const [templates, setTemplates] = useState<Record<string, string>>({});
   const [catalog, setCatalog] = useState<ModHubEntry[]>([]);
   const [shareText, setShareText] = useState<string | null>(null);
+  const [seedMsg, setSeedMsg] = useState<string | null>(null);
   const [editing, setEditing] = useState<Scenario | null>(null);
   const [generating, setGenerating] = useState(false);
   const [pickingSave, setPickingSave] = useState(false);
@@ -160,7 +165,12 @@ export default function Scenarios({
 
   // Create a savegame for a scenario: clone a source save (same map) into a
   // target slot, then stamp the scenario's money + name onto it.
-  async function seedSave(scenario: Scenario, from: string, to: string) {
+  async function seedSave(
+    scenario: Scenario,
+    from: string,
+    to: string,
+    equip: EquipMode,
+  ) {
     // A from-scratch scenario expects the source to be a fresh save (made via
     // FS25's "Start From Scratch"). Judge that by owned *equipment* value, not
     // total assets — a map's pre-placed farmstead buildings are on your farm
@@ -185,6 +195,13 @@ export default function Scenarios({
     await guard(async () => {
       await api.cloneSavegame(from, to);
       await api.patchSavegame(to, scenario.name || null, scenario.startMoney);
+      if (equip !== "keep") {
+        const n = await api.stripEquipment(to, equip === "base");
+        setSeedMsg(
+          `Seeded ${to}: removed ${n} vehicle${n === 1 ? "" : "s"}` +
+            (equip === "base" ? " (kept a base vehicle)." : "."),
+        );
+      }
       await refreshSaves();
     });
   }
@@ -287,6 +304,15 @@ export default function Scenarios({
         ))}
         <span className="count">{scenarios.length} scenarios</span>
       </div>
+
+      {seedMsg && (
+        <div className="banner">
+          {seedMsg}
+          <button className="link" onClick={() => setSeedMsg(null)}>
+            dismiss
+          </button>
+        </div>
+      )}
 
       {scenarios.length === 0 && (
         <div className="empty">
@@ -494,7 +520,7 @@ export default function Scenarios({
                   templateSlot={s.map ? templates[mapKeyOfFile(s.map)] : undefined}
                   busy={busy}
                   onRefreshSaves={refreshSaves}
-                  onSeed={(from, to) => seedSave(s, from, to)}
+                  onSeed={(from, to, equip) => seedSave(s, from, to, equip)}
                 />
                 <button
                   className="btn ghost sm"
@@ -628,7 +654,7 @@ function SeedButton({
   templateSlot?: string;
   busy: boolean;
   onRefreshSaves: () => void;
-  onSeed: (from: string, to: string) => void;
+  onSeed: (from: string, to: string, equip: EquipMode) => void;
 }) {
   const [open, setOpen] = useState(false);
   // Saves on the scenario's map (clone can't change a save's map). Match by the
@@ -639,6 +665,9 @@ function SeedButton({
       : saves;
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  // From-scratch scenarios default to a bare garage; others keep equipment.
+  const zeroStart = scenario.mode === "scratch" || !!scenario.warmupToJanuary;
+  const [equip, setEquip] = useState<EquipMode>(zeroStart ? "none" : "keep");
 
   // Whenever the popover opens or a refresh brings new saves, (re)pick a sensible
   // source: the designated template, else the first same-map save.
@@ -695,11 +724,20 @@ function SeedButton({
                   </option>
                 ))}
               </select>
+              <select
+                value={equip}
+                title="What to do with the cloned save's owned vehicles (a backup is made first)"
+                onChange={(e) => setEquip(e.target.value as EquipMode)}
+              >
+                <option value="keep">🚜 Keep equipment</option>
+                <option value="base">🚜 Keep base vehicle only</option>
+                <option value="none">🚜 Remove all equipment</option>
+              </select>
               <button
                 className="btn sm"
                 disabled={busy || !from || !to}
                 onClick={() => {
-                  onSeed(from, to);
+                  onSeed(from, to, equip);
                   setOpen(false);
                 }}
               >

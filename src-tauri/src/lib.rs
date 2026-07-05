@@ -1873,6 +1873,100 @@ fn farms_set_money(farms: &str, money: f64) -> String {
         .into_owned()
 }
 
+/// Remove every top-level `<vehicle>` owned by `farm_id` from a vehicles.xml
+/// string, returning `(new_xml, removed_count)`. If `keep_cheapest`, the single
+/// lowest-`price` owned vehicle is retained (a "base" starter). Removal is by
+/// each element's exact byte range, so the rest of the file is untouched; a
+/// leading UTF-8 BOM (which FS25 saves carry) is preserved.
+fn strip_farm_vehicles(xml: &str, farm_id: &str, keep_cheapest: bool) -> (String, usize) {
+    let had_bom = xml.starts_with('\u{feff}');
+    let src = strip_bom(xml);
+    let doc = match roxmltree::Document::parse(src) {
+        Ok(d) => d,
+        Err(_) => return (xml.to_string(), 0),
+    };
+    // (byte range, price) for each vehicle on the player's farm.
+    let mut owned: Vec<(std::ops::Range<usize>, f64)> = doc
+        .root_element()
+        .children()
+        .filter(|n| n.has_tag_name("vehicle") && n.attribute("farmId") == Some(farm_id))
+        .map(|n| {
+            let price = n
+                .attribute("price")
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            (n.range(), price)
+        })
+        .collect();
+    if owned.is_empty() {
+        return (xml.to_string(), 0);
+    }
+    // Optionally keep the cheapest one.
+    let keep_idx = if keep_cheapest {
+        owned
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1 .1.total_cmp(&b.1 .1))
+            .map(|(i, _)| i)
+    } else {
+        None
+    };
+    let mut ranges: Vec<std::ops::Range<usize>> = owned
+        .drain(..)
+        .enumerate()
+        .filter(|(i, _)| Some(*i) != keep_idx)
+        .map(|(_, (r, _))| r)
+        .collect();
+    ranges.sort_by_key(|r| r.start);
+
+    let mut out = String::with_capacity(src.len());
+    let mut pos = 0;
+    for r in &ranges {
+        out.push_str(&src[pos..r.start]);
+        pos = r.end;
+    }
+    out.push_str(&src[pos..]);
+    let result = if had_bom {
+        format!("\u{feff}{out}")
+    } else {
+        out
+    };
+    (result, ranges.len())
+}
+
+/// Remove the player's owned vehicles from a seeded/existing save (backing it up
+/// first). `keep_base` retains the single cheapest vehicle. Returns how many
+/// were removed.
+#[tauri::command]
+fn strip_equipment(app: AppHandle, slot: String, keep_base: bool) -> Result<usize, String> {
+    safe_filename(&slot)?;
+    let cfg = load_config(&app)?;
+    let dir = game_dir(&cfg).join(&slot);
+    if !dir.join("careerSavegame.xml").exists() {
+        return Err("no savegame in that slot".into());
+    }
+    let vpath = dir.join("vehicles.xml");
+    if !vpath.exists() {
+        return Ok(0);
+    }
+    // Snapshot before editing so a bad strip is one click to restore.
+    backup_savegame(app.clone(), slot.clone())?;
+
+    let money = (|| {
+        let s = fs::read_to_string(dir.join("careerSavegame.xml")).ok()?;
+        let doc = roxmltree::Document::parse(strip_bom(&s)).ok()?;
+        xml_text(&doc, "money")?.parse::<f64>().ok()
+    })();
+    let farm_id = read_player_farm(&dir.join("farms.xml"), money)
+        .map(|(_, id)| id)
+        .unwrap_or_else(|| "1".into());
+
+    let xml = fs::read_to_string(&vpath).map_err(|e| e.to_string())?;
+    let (new_xml, removed) = strip_farm_vehicles(&xml, &farm_id, keep_base);
+    fs::write(&vpath, new_xml).map_err(|e| e.to_string())?;
+    Ok(removed)
+}
+
 fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
     for entry in walkdir::WalkDir::new(src).into_iter().flatten() {
         let path = entry.path();
@@ -2174,6 +2268,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn strips_owned_vehicles_both_modes() {
+        let xml = "\u{feff}<vehicles>\n\
+            <vehicle farmId=\"1\" price=\"26000\" filename=\"a\"/>\n\
+            <vehicle farmId=\"1\" price=\"100000\" filename=\"b\"/>\n\
+            <vehicle farmId=\"0\" price=\"5\" filename=\"npc\"/>\n\
+            </vehicles>";
+        // keep cheapest: drops the $100k, keeps the $26k and the NPC vehicle
+        let (kept, n) = strip_farm_vehicles(xml, "1", true);
+        assert_eq!(n, 1);
+        assert!(kept.contains("price=\"26000\""));
+        assert!(!kept.contains("price=\"100000\""));
+        assert!(kept.contains("npc"));
+        assert!(kept.starts_with('\u{feff}')); // BOM preserved
+                                               // remove all: no farm-1 vehicles remain, NPC untouched
+        let (none, n2) = strip_farm_vehicles(xml, "1", false);
+        assert_eq!(n2, 2);
+        assert!(!none.contains("farmId=\"1\""));
+        assert!(none.contains("npc"));
+    }
+
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn cli_path_includes_homebrew_dirs() {
@@ -2266,6 +2381,7 @@ pub fn run() {
             list_slots,
             patch_savegame,
             clone_savegame,
+            strip_equipment,
             get_templates,
             set_template,
             farm_overview,

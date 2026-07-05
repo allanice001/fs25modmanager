@@ -209,6 +209,8 @@ export const api = {
     invoke<void>("patch_savegame", { slot, name, money }),
   cloneSavegame: (fromSlot: string, toSlot: string) =>
     invoke<void>("clone_savegame", { fromSlot, toSlot }),
+  stripEquipment: (slot: string, keepBase: boolean) =>
+    invoke<number>("strip_equipment", { slot, keepBase }),
   getTemplates: () => invoke<Record<string, string>>("get_templates"),
   setTemplate: (mapKey: string, slot: string) =>
     invoke<void>("set_template", { mapKey, slot }),
