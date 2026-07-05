@@ -909,8 +909,14 @@ function SeedButton({
                   <input
                     className="rule-value"
                     type="number"
+                    min={0}
+                    max={30000}
                     value={allowance}
-                    onChange={(e) => setAllowance(Number(e.target.value))}
+                    onChange={(e) =>
+                      setAllowance(
+                        Math.min(30000, Math.max(0, Number(e.target.value))),
+                      )
+                    }
                   />
                 </label>
               )}
@@ -928,7 +934,12 @@ function SeedButton({
                   setOpen(false);
                 }}
               >
-                Create {scenario.startMoney != null ? "with $" + scenario.startMoney : ""}
+                Create
+                {equip === "allowance"
+                  ? ` with ${money(allowance)}`
+                  : scenario.startMoney != null
+                    ? ` with ${money(scenario.startMoney)}`
+                    : ""}
               </button>
             </>
           )}
