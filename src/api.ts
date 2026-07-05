@@ -42,6 +42,9 @@ export interface CompanionData {
   daysPerPeriod: number | null;
   period: number | null;
   hour: number | null;
+  /** Owned-vehicle count + names — what the player has bought. */
+  vehicleCount: number | null;
+  vehicles: string[];
   /** File mtime in ms (wall clock) — for freshness. */
   updatedMs: number | null;
 }

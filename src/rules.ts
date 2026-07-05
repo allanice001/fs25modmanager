@@ -3,7 +3,7 @@
 // can express sustained/duration conditions like "debt-free for 6 months", not
 // just an instantaneous snapshot check.
 
-export type Metric = "cash" | "debt" | "net" | "equipment";
+export type Metric = "cash" | "debt" | "net" | "equipment" | "vehicles";
 export type Op = "gte" | "lte" | "gt" | "lt" | "eq" | "neq";
 /** Temporal quantifier for the condition. */
 export type When = "now" | "ever" | "always" | "never" | "sustained";
@@ -33,6 +33,8 @@ export interface Sample {
   debt: number;
   /** Owned-equipment (vehicle) value. */
   equipment: number;
+  /** Owned-vehicle count. */
+  vehicles: number;
 }
 
 export type RuleState = "pass" | "fail" | "pending" | "unknown";
@@ -62,6 +64,10 @@ export const RULE_PRESETS: { label: string; rule: Omit<Rule, "id"> }[] = [
     label: "Hold $1M net 3mo",
     rule: { metric: "net", op: "gte", value: 1_000_000, when: "sustained", months: 3, consecutive: true },
   },
+  {
+    label: "Buy a vehicle",
+    rule: { metric: "vehicles", op: "gte", value: 1, when: "ever" },
+  },
 ];
 
 const EPS = 0.5; // money is float; treat sub-dollar diffs as equal
@@ -76,6 +82,8 @@ export function metricValue(s: Sample, m: Metric): number {
       return s.equipment;
     case "net":
       return s.cash + s.equipment - s.debt;
+    case "vehicles":
+      return s.vehicles;
   }
 }
 
@@ -101,6 +109,7 @@ const METRIC_LABEL: Record<Metric, string> = {
   debt: "debt",
   net: "net worth",
   equipment: "equipment",
+  vehicles: "vehicles owned",
 };
 const OP_LABEL: Record<Op, string> = {
   gte: "≥",
@@ -124,7 +133,8 @@ export function describeRule(r: Rule): string {
   } else if (r.metric === "debt" && (r.op === "gt" || r.op === "gte") && r.value <= EPS) {
     cond = "Carrying debt";
   } else {
-    cond = `${METRIC_LABEL[r.metric]} ${OP_LABEL[r.op]} ${fmtMoney(r.value)}`;
+    const val = r.metric === "vehicles" ? String(r.value) : fmtMoney(r.value);
+    cond = `${METRIC_LABEL[r.metric]} ${OP_LABEL[r.op]} ${val}`;
     cond = cond.charAt(0).toUpperCase() + cond.slice(1);
   }
 

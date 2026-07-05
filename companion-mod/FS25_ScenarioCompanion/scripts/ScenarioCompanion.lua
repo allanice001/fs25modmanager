@@ -58,6 +58,41 @@ local function farmMoneyLoan(farmId)
     return money, loan
 end
 
+-- The player's owned vehicles: returns (names[], count). Used to track what the
+-- player has bought over time. Best-effort across FS25 API shapes.
+local function ownedVehicles(farmId)
+    local names, count = {}, 0
+    local mission = g_currentMission
+    if mission == nil then return names, count end
+    local list = mission.vehicles
+    if list == nil and mission.vehicleSystem ~= nil then
+        list = mission.vehicleSystem.vehicles
+    end
+    if list == nil then return names, count end
+    for _, v in pairs(list) do
+        if type(v) == "table" then
+            local owner = nil
+            if v.getOwnerFarmId ~= nil then
+                local ok, id = pcall(function() return v:getOwnerFarmId() end)
+                if ok then owner = id end
+            end
+            if owner == nil then owner = v.ownerFarmId end
+            if owner == farmId then
+                count = count + 1
+                if #names < 40 then
+                    local name = nil
+                    if v.getFullName ~= nil then
+                        local ok, n = pcall(function() return v:getFullName() end)
+                        if ok then name = n end
+                    end
+                    table.insert(names, name or "vehicle")
+                end
+            end
+        end
+    end
+    return names, count
+end
+
 function ScenarioCompanion:write()
     local mission = g_currentMission
     if mission == nil or mission.missionInfo == nil then return end
@@ -86,6 +121,14 @@ function ScenarioCompanion:write()
     setXMLInt(xml, ROOT .. ".daysPerPeriod", daysPerPeriod)
     setXMLInt(xml, ROOT .. ".period", period)
     setXMLInt(xml, ROOT .. ".hour", hour)
+
+    -- Owned vehicles: count + names, so the manager can track what's been bought.
+    local vnames, vcount = ownedVehicles(farmId)
+    setXMLInt(xml, ROOT .. ".vehicleCount", vcount)
+    for i, n in ipairs(vnames) do
+        setXMLString(xml, string.format("%s.vehicles.v(%d)#name", ROOT, i - 1), n)
+    end
+
     setXMLString(xml, ROOT .. ".updatedBy", "FS25_ScenarioCompanion")
     saveXMLFile(xml)
     delete(xml)
@@ -102,6 +145,7 @@ function ScenarioCompanion:appendHistory(day)
 
     local farmId = resolveFarmId()
     local cash, loan = farmMoneyLoan(farmId)
+    local _, vcount = ownedVehicles(farmId)
 
     local xml, count = nil, 0
     if fileExists(path) then
@@ -130,6 +174,7 @@ function ScenarioCompanion:appendHistory(day)
     setXMLInt(xml, key .. "#day", day)
     setXMLFloat(xml, key .. "#cash", cash)
     setXMLFloat(xml, key .. "#loan", loan)
+    setXMLInt(xml, key .. "#veh", vcount)
     saveXMLFile(xml)
     delete(xml)
 end

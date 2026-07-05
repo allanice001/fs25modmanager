@@ -57,6 +57,7 @@ const METRIC_OPTS: { v: Metric; label: string }[] = [
   { v: "debt", label: "Debt" },
   { v: "net", label: "Net worth" },
   { v: "equipment", label: "Equipment" },
+  { v: "vehicles", label: "Vehicles owned" },
 ];
 const OP_OPTS: { v: Op; label: string }[] = [
   { v: "gte", label: "≥" },
@@ -526,6 +527,21 @@ export default function Scenarios({
                         {c.money != null && ` · ${money(c.money)}`}
                         {c.day != null && ` · Day ${c.day}`}
                         {c.loan != null && c.loan > 0 && ` · debt ${money(c.loan)}`}
+                        {c.vehicleCount != null &&
+                          ` · 🚜 ${c.vehicleCount}`}
+                        {c.vehicles.length > 0 && (
+                          <span
+                            className="muted"
+                            title={c.vehicles.join(", ")}
+                          >
+                            {" "}
+                            ({c.vehicles.slice(0, 3).join(", ")}
+                            {c.vehicles.length > 3
+                              ? ` +${c.vehicles.length - 3}`
+                              : ""}
+                            )
+                          </span>
+                        )}
                         {!fresh && (
                           <span className="muted"> · from last session</span>
                         )}

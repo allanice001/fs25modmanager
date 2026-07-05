@@ -210,6 +210,9 @@ struct CompanionData {
     days_per_period: Option<i64>,
     period: Option<i64>,
     hour: Option<i64>,
+    /// Owned-vehicle count + names — what the player has bought.
+    vehicle_count: Option<i64>,
+    vehicles: Vec<String>,
     /// File modified time (ms since epoch, wall clock) — for freshness.
     updated_ms: Option<u64>,
 }
@@ -231,6 +234,12 @@ fn read_companion(app: AppHandle, slot: String) -> Result<Option<CompanionData>,
         .and_then(|m| m.modified().ok())
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as u64);
+    let vehicles: Vec<String> = doc
+        .root_element()
+        .descendants()
+        .filter(|n| n.has_tag_name("v"))
+        .filter_map(|n| n.attribute("name").map(str::to_string))
+        .collect();
     Ok(Some(CompanionData {
         money: num("money"),
         loan: num("loan"),
@@ -238,6 +247,8 @@ fn read_companion(app: AppHandle, slot: String) -> Result<Option<CompanionData>,
         days_per_period: int("daysPerPeriod"),
         period: int("period"),
         hour: int("hour"),
+        vehicle_count: int("vehicleCount"),
+        vehicles,
         updated_ms,
     }))
 }
@@ -251,6 +262,9 @@ struct Sample {
     cash: f64,
     debt: f64,
     equipment: f64,
+    /// Owned-vehicle count (0 if unknown).
+    #[serde(default)]
+    vehicles: i64,
 }
 
 /// Build a scenario's day-ordered history for the rule engine, merging (a) any
@@ -317,6 +331,11 @@ fn scenario_history(
                         .and_then(|v| v.parse().ok())
                         .unwrap_or(0.0);
                     let equipment = byday.get(&day).map(|x| x.equipment).unwrap_or(0.0);
+                    let vehicles = n
+                        .attribute("veh")
+                        .and_then(|v| v.parse::<i64>().ok())
+                        .or_else(|| byday.get(&day).map(|x| x.vehicles))
+                        .unwrap_or(0);
                     byday.insert(
                         day,
                         Sample {
@@ -325,6 +344,7 @@ fn scenario_history(
                             cash,
                             debt,
                             equipment,
+                            vehicles,
                         },
                     );
                 }
@@ -343,10 +363,15 @@ fn scenario_history(
             Some((l, id)) => (l.unwrap_or(0.0), Some(id)),
             None => (0.0, None),
         };
+        let vpath = base.join("vehicles.xml");
         let equipment = farm_id
             .as_ref()
-            .map(|fid| sum_owned_prices(&base.join("vehicles.xml"), fid))
+            .map(|fid| sum_owned_prices(&vpath, fid))
             .unwrap_or(0.0);
+        let vehicles = farm_id
+            .as_ref()
+            .map(|fid| count_owned_vehicles(&vpath, fid))
+            .unwrap_or(0);
         byday.insert(
             cur_day,
             Sample {
@@ -355,6 +380,7 @@ fn scenario_history(
                 cash: money.unwrap_or(0.0),
                 debt: loan,
                 equipment,
+                vehicles,
             },
         );
     }
@@ -1299,6 +1325,25 @@ fn sum_owned_prices(path: &Path, farm_id: &str) -> f64 {
         Some(total)
     })()
     .unwrap_or(0.0)
+}
+
+/// Count `farm_id`'s owned vehicles in a vehicles.xml (excludes leased).
+fn count_owned_vehicles(path: &Path, farm_id: &str) -> i64 {
+    (|| -> Option<i64> {
+        let s = fs::read_to_string(path).ok()?;
+        let doc = roxmltree::Document::parse(strip_bom(&s)).ok()?;
+        let n = doc
+            .root_element()
+            .children()
+            .filter(|n| {
+                n.has_tag_name("vehicle")
+                    && n.attribute("farmId") == Some(farm_id)
+                    && !matches!(n.attribute("propertyState"), Some(x) if x != "OWNED")
+            })
+            .count();
+        Some(n as i64)
+    })()
+    .unwrap_or(0)
 }
 
 /// FS25 new games begin in period 6 (August), so a brand-new save already sits

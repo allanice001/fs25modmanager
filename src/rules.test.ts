@@ -9,12 +9,19 @@ import {
 } from "./rules";
 
 // day = month when daysPerPeriod = 1, which keeps the sustained math readable.
-const s = (day: number, cash: number, debt: number, equipment = 0): Sample => ({
+const s = (
+  day: number,
+  cash: number,
+  debt: number,
+  equipment = 0,
+  vehicles = 0,
+): Sample => ({
   day,
   daysPerPeriod: 1,
   cash,
   debt,
   equipment,
+  vehicles,
 });
 
 describe("metricValue / compare", () => {
