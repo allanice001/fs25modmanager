@@ -228,7 +228,11 @@ function SaveCard({
     s.money != null ? String(Math.round(s.money)) : "",
   );
   const [cloneTo, setCloneTo] = useState("");
-  const net = s.money != null ? s.money + (s.assetValue ?? 0) - (s.loan ?? 0) : null;
+  // Net worth = cash + owned equipment − debt. Buildings (which include any the
+  // map pre-places on the starting farm) are shown in the Farm overview, not here.
+  const equip = s.vehicleValue ?? null;
+  const net =
+    s.money != null ? s.money + (equip ?? 0) - (s.loan ?? 0) : null;
   const working = busy?.startsWith(s.slot);
 
   // Lazily-loaded farm overview (vehicles/buildings/fields).
@@ -278,9 +282,9 @@ function SaveCard({
                 <b>Cash</b> {money(s.money)}
               </span>
             )}
-            {s.assetValue != null && s.assetValue > 0 && (
+            {equip != null && equip > 0 && (
               <span className="track">
-                <b>Assets</b> {money(s.assetValue)}
+                <b>Equipment</b> {money(equip)}
               </span>
             )}
             {net != null && (

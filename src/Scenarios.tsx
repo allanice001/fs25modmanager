@@ -315,9 +315,14 @@ export default function Scenarios({
             ? Math.max(0, rawYrs - WARMUP_YEARS)
             : rawYrs;
         const debt = save?.loan ?? null;
-        const assets = save?.assetValue ?? null;
-        const net =
-          cur != null ? cur + (assets ?? 0) - (debt ?? 0) : null;
+        // Net worth counts cash + owned equipment − debt. Buildings are shown
+        // separately: a map's pre-placed farmstead would otherwise inflate it.
+        const equip = save?.vehicleValue ?? null;
+        const buildings =
+          save && save.assetValue != null && save.vehicleValue != null
+            ? save.assetValue - save.vehicleValue
+            : null;
+        const net = cur != null ? cur + (equip ?? 0) - (debt ?? 0) : null;
         const goalReached = pct != null && pct >= 100;
         const overDeadline =
           s.deadlineYears != null && yrs != null && yrs > s.deadlineYears;
@@ -370,9 +375,17 @@ export default function Scenarios({
                         <b>Cash</b> {money(cur)}
                       </span>
                     )}
-                    {assets != null && assets > 0 && (
+                    {equip != null && equip > 0 && (
                       <span className="track">
-                        <b>Assets</b> {money(assets)}
+                        <b>Equipment</b> {money(equip)}
+                      </span>
+                    )}
+                    {buildings != null && buildings > 0 && (
+                      <span
+                        className="track muted"
+                        title="Value of buildings on your farm (includes any the map pre-places) — not counted in net worth"
+                      >
+                        <b>Buildings</b> {money(buildings)}
                       </span>
                     )}
                     {debt != null && debt > 0 && (
@@ -381,7 +394,7 @@ export default function Scenarios({
                       </span>
                     )}
                     {net != null && (
-                      <span className="track net" title="cash + assets − debt">
+                      <span className="track net" title="cash + equipment − debt">
                         <b>Net</b> {money(net)}
                       </span>
                     )}
