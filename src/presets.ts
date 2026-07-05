@@ -35,6 +35,12 @@ export const RULES: Rule[] = [
 
 export const ruleById = (id: string) => RULES.find((r) => r.id === id);
 
+/** Rules that can't be active together — each maps to the rule it contradicts. */
+export const RULE_CONFLICTS: Record<string, string> = {
+  "must-have-debt": "debt-free",
+  "debt-free": "must-have-debt",
+};
+
 /** A built-in scenario "mode" the user can instantiate from their library. */
 export interface Preset {
   id: string;
