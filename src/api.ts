@@ -7,6 +7,21 @@ export interface Config {
   modsDir: string;
   linkMode: LinkMode;
   activeMap: string | null;
+  /** Developer mode: surfaces the action log, paths and diagnostics. */
+  devMode?: boolean;
+}
+
+export interface LogEntry {
+  ts: number;
+  level: string;
+  message: string;
+}
+
+export interface AppPaths {
+  configDir: string;
+  libraryDir: string;
+  modsDir: string;
+  logFile: string;
 }
 
 export interface ItemMeta {
@@ -211,6 +226,10 @@ export const api = {
     invoke<void>("clone_savegame", { fromSlot, toSlot }),
   stripEquipment: (slot: string, keepBase: boolean) =>
     invoke<number>("strip_equipment", { slot, keepBase }),
+  getLog: () => invoke<LogEntry[]>("get_log"),
+  clearLog: () => invoke<void>("clear_log"),
+  appPaths: () => invoke<AppPaths>("app_paths"),
+  openFolder: (path: string) => invoke<void>("open_folder", { path }),
   getTemplates: () => invoke<Record<string, string>>("get_templates"),
   setTemplate: (mapKey: string, slot: string) =>
     invoke<void>("set_template", { mapKey, slot }),

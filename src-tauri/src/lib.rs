@@ -38,6 +38,9 @@ struct Config {
     /// GitHub repo (owner/name) used for backup/sync, if configured.
     #[serde(default)]
     sync_repo: Option<String>,
+    /// Developer mode: surfaces the action log, paths and extra diagnostics.
+    #[serde(default)]
+    dev_mode: bool,
 }
 
 fn default_mods_dir() -> PathBuf {
@@ -81,6 +84,7 @@ fn default_config() -> Config {
         link_mode: default_link_mode(),
         active_map: None,
         sync_repo: None,
+        dev_mode: false,
     }
 }
 
@@ -88,6 +92,111 @@ fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogEntry {
+    /// Milliseconds since the Unix epoch (formatted client-side).
+    ts: u64,
+    level: String,
+    message: String,
+}
+
+/// Append a timestamped line to the rolling action log (`app.log` in the config
+/// dir). Best-effort: never fails a command if logging can't write. Lines are
+/// `<epoch_ms>\t<level>\t<message>`; the file is trimmed when it gets large.
+fn log_line(app: &AppHandle, level: &str, message: &str) {
+    use std::io::Write;
+    let Ok(dir) = config_dir(app) else { return };
+    let path = dir.join("app.log");
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let line = format!("{ts}\t{level}\t{}\n", message.replace(['\n', '\t'], " "));
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = f.write_all(line.as_bytes());
+    }
+    // Keep the log bounded: once it passes ~512 KB, keep the last 1000 lines.
+    if fs::metadata(&path)
+        .map(|m| m.len() > 512 * 1024)
+        .unwrap_or(false)
+    {
+        if let Ok(content) = fs::read_to_string(&path) {
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(1000);
+            let _ = fs::write(&path, format!("{}\n", lines[start..].join("\n")));
+        }
+    }
+}
+
+#[tauri::command]
+fn get_log(app: AppHandle) -> Result<Vec<LogEntry>, String> {
+    let path = config_dir(&app)?.join("app.log");
+    let Ok(content) = fs::read_to_string(&path) else {
+        return Ok(Vec::new());
+    };
+    let mut entries: Vec<LogEntry> = content
+        .lines()
+        .filter_map(|l| {
+            let mut it = l.splitn(3, '\t');
+            let ts = it.next()?.parse::<u64>().ok()?;
+            let level = it.next()?.to_string();
+            let message = it.next().unwrap_or("").to_string();
+            Some(LogEntry { ts, level, message })
+        })
+        .collect();
+    // Return the most recent 500, newest first.
+    let start = entries.len().saturating_sub(500);
+    entries.drain(..start);
+    entries.reverse();
+    Ok(entries)
+}
+
+#[tauri::command]
+fn clear_log(app: AppHandle) -> Result<(), String> {
+    let path = config_dir(&app)?.join("app.log");
+    if path.exists() {
+        fs::write(&path, "").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Key filesystem paths, for the developer-mode diagnostics panel.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppPaths {
+    config_dir: String,
+    library_dir: String,
+    mods_dir: String,
+    log_file: String,
+}
+
+#[tauri::command]
+fn app_paths(app: AppHandle) -> Result<AppPaths, String> {
+    let dir = config_dir(&app)?;
+    let cfg = load_config(&app)?;
+    Ok(AppPaths {
+        log_file: dir.join("app.log").to_string_lossy().into_owned(),
+        config_dir: dir.to_string_lossy().into_owned(),
+        library_dir: cfg.library_dir,
+        mods_dir: cfg.mods_dir,
+    })
+}
+
+/// Open a folder in the OS file manager (developer-mode "reveal" buttons).
+#[tauri::command]
+fn open_folder(path: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let mut c = std::process::Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut c = std::process::Command::new("explorer");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut c = std::process::Command::new("xdg-open");
+    c.arg(&path);
+    c.spawn().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn load_config(app: &AppHandle) -> Result<Config, String> {
@@ -515,7 +624,16 @@ fn apply_enabled(cfg: &Config, filename: &str, enabled: bool) -> Result<(), Stri
 fn set_enabled(app: AppHandle, filename: String, enabled: bool) -> Result<(), String> {
     safe_filename(&filename)?;
     let cfg = load_config(&app)?;
-    apply_enabled(&cfg, &filename, enabled)
+    apply_enabled(&cfg, &filename, enabled)?;
+    log_line(
+        &app,
+        "info",
+        &format!(
+            "{} {filename}",
+            if enabled { "enabled" } else { "disabled" }
+        ),
+    );
+    Ok(())
 }
 
 #[tauri::command]
@@ -527,6 +645,15 @@ fn set_enabled_many(app: AppHandle, filenames: Vec<String>, enabled: bool) -> Re
     for f in &filenames {
         apply_enabled(&cfg, f, enabled)?;
     }
+    log_line(
+        &app,
+        "info",
+        &format!(
+            "{} {} mod(s)",
+            if enabled { "enabled" } else { "disabled" },
+            filenames.len()
+        ),
+    );
     Ok(())
 }
 
@@ -798,6 +925,11 @@ async fn download_mod(app: AppHandle, mod_id: String) -> Result<String, String> 
     file.flush().await.map_err(|e| e.to_string())?;
     drop(file);
     fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
+    log_line(
+        &app,
+        "info",
+        &format!("downloaded {filename} (mod {mod_id})"),
+    );
     Ok(filename)
 }
 
@@ -1169,7 +1301,18 @@ fn apply_scenario(app: AppHandle, id: String, exclusive: bool) -> Result<(), Str
     }
 
     cfg.active_map = scenario.map.clone();
-    write_config(&app, &cfg)
+    write_config(&app, &cfg)?;
+    log_line(
+        &app,
+        "info",
+        &format!(
+            "applied scenario \"{}\" ({} mod(s){})",
+            scenario.name,
+            keep.len(),
+            if exclusive { ", clean slate" } else { "" }
+        ),
+    );
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1279,6 +1422,13 @@ fn fix_links(app: AppHandle) -> Result<usize, String> {
             fs::copy(&target, &path).map_err(|e| e.to_string())?;
         }
         fixed += 1;
+    }
+    if fixed > 0 {
+        log_line(
+            &app,
+            "info",
+            &format!("fixed {fixed} symlink(s) → hardlinks"),
+        );
     }
     Ok(fixed)
 }
@@ -1845,6 +1995,15 @@ fn patch_savegame(
             fs::write(&farms_path, farms_set_money(&farms, m)).map_err(|e| e.to_string())?;
         }
     }
+    log_line(
+        &app,
+        "info",
+        &format!(
+            "patched {slot}{}{}",
+            money.map(|m| format!(" money={m}")).unwrap_or_default(),
+            name.map(|n| format!(" name={n}")).unwrap_or_default()
+        ),
+    );
     Ok(())
 }
 
@@ -1964,6 +2123,14 @@ fn strip_equipment(app: AppHandle, slot: String, keep_base: bool) -> Result<usiz
     let xml = fs::read_to_string(&vpath).map_err(|e| e.to_string())?;
     let (new_xml, removed) = strip_farm_vehicles(&xml, &farm_id, keep_base);
     fs::write(&vpath, new_xml).map_err(|e| e.to_string())?;
+    log_line(
+        &app,
+        "info",
+        &format!(
+            "stripped {removed} vehicle(s) from {slot}{}",
+            if keep_base { " (kept base)" } else { "" }
+        ),
+    );
     Ok(removed)
 }
 
@@ -2032,7 +2199,9 @@ fn clone_savegame(app: AppHandle, from_slot: String, to_slot: String) -> Result<
     if dst.exists() {
         fs::remove_dir_all(&dst).map_err(|e| e.to_string())?;
     }
-    copy_dir(&src, &dst)
+    copy_dir(&src, &dst)?;
+    log_line(&app, "info", &format!("cloned {from_slot} → {to_slot}"));
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -2382,6 +2551,10 @@ pub fn run() {
             patch_savegame,
             clone_savegame,
             strip_equipment,
+            get_log,
+            clear_log,
+            app_paths,
+            open_folder,
             get_templates,
             set_template,
             farm_overview,

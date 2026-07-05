@@ -3,8 +3,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
 import {
   api,
+  AppPaths,
   Config,
   HealthReport,
+  LogEntry,
   ManifestEntry,
   ModItem,
   Profile,
@@ -919,6 +921,14 @@ function Settings({
     onSaved();
   }
 
+  // Dev mode persists immediately (no need to hit "Save settings").
+  async function toggleDev(on: boolean) {
+    const next = { ...draft, devMode: on };
+    setDraft(next);
+    await api.saveConfig(next);
+    onSaved();
+  }
+
   async function importMods() {
     setImporting(true);
     setImportMsg(null);
@@ -1135,6 +1145,116 @@ function Settings({
             {checkingUpdate ? "Checking…" : "⬆ Check for updates"}
           </button>
         </div>
+      </div>
+
+      <div className="field import-box">
+        Developer
+        <span className="hint">
+          Troubleshooting tools: an action log, resolved paths and extra
+          diagnostics — handy when something misbehaves or for a bug report.
+        </span>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={!!draft.devMode}
+            onChange={(e) => toggleDev(e.target.checked)}
+          />
+          Enable developer mode
+        </label>
+        {draft.devMode && <DevPanel />}
+      </div>
+    </div>
+  );
+}
+
+function DevPanel() {
+  const [log, setLog] = useState<LogEntry[]>([]);
+  const [paths, setPaths] = useState<AppPaths | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function load() {
+    setLog(await api.getLog().catch(() => []));
+    setPaths(await api.appPaths().catch(() => null));
+  }
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function copyLog() {
+    const text = log
+      .map((e) => `${new Date(e.ts).toISOString()} [${e.level}] ${e.message}`)
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked */
+    }
+  }
+
+  return (
+    <div className="dev-panel">
+      {paths && (
+        <div className="dev-paths">
+          {(
+            [
+              ["Config", paths.configDir],
+              ["Library", paths.libraryDir],
+              ["Mods", paths.modsDir],
+              ["Log file", paths.logFile],
+            ] as const
+          ).map(([label, p]) => (
+            <div key={label} className="dev-path-row">
+              <span className="dev-path-label">{label}</span>
+              <code title={p}>{p}</code>
+              <button
+                className="btn ghost sm"
+                onClick={() => api.openFolder(p).catch(() => {})}
+              >
+                Reveal
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="editor-actions">
+        <button className="btn ghost sm" onClick={load}>
+          ⟳ Refresh
+        </button>
+        <button className="btn ghost sm" onClick={copyLog} disabled={!log.length}>
+          {copied ? "Copied ✓" : "📋 Copy log"}
+        </button>
+        <button
+          className="btn ghost sm"
+          disabled={!log.length}
+          onClick={async () => {
+            await api.clearLog();
+            load();
+          }}
+        >
+          Clear log
+        </button>
+        <span className="count">{log.length} entries</span>
+      </div>
+
+      <div className="dev-log">
+        {log.length === 0 ? (
+          <span className="muted">
+            No log entries yet — actions you take (enable, seed, download…) will
+            appear here.
+          </span>
+        ) : (
+          log.map((e, i) => (
+            <div key={i} className={"dev-log-row " + e.level}>
+              <span className="dev-log-ts">
+                {new Date(e.ts).toLocaleTimeString()}
+              </span>
+              <span className="dev-log-msg">{e.message}</span>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );

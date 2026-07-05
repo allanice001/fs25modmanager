@@ -1060,3 +1060,59 @@ main {
   white-space: pre;
   overflow-x: auto;
 }
+
+/* ---- Developer panel ---- */
+.dev-panel {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.dev-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dev-path-row {
+  display: grid;
+  grid-template-columns: 70px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.dev-path-label {
+  color: var(--muted);
+}
+.dev-path-row code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.dev-log {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dev-log-row {
+  display: flex;
+  gap: 10px;
+}
+.dev-log-ts {
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+.dev-log-row.error .dev-log-msg {
+  color: var(--bad);
+}
+.dev-log-row.warn .dev-log-msg {
+  color: var(--warn);
+}
