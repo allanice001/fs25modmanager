@@ -21,6 +21,15 @@ import { modhubSearch, modhubMapsLive } from "./ModHub";
 import { saveMapStem, fileStem, mapKeyOfFile, saveOnMap } from "./mapId";
 import { buildScenarioShare } from "./export";
 import {
+  Rule,
+  Sample,
+  Metric,
+  Op,
+  When,
+  describeRule,
+  evaluateRule,
+} from "./rules";
+import {
   DIFFICULTIES,
   Difficulty,
   GenOptions,
@@ -39,6 +48,28 @@ const WARMUP_YEARS = 5 / 12;
 /** What to do with the seeded save's equipment: keep it, keep only a base
  *  vehicle, or remove all owned vehicles for a bare start. */
 type EquipMode = "keep" | "base" | "none";
+
+const METRIC_OPTS: { v: Metric; label: string }[] = [
+  { v: "cash", label: "Cash" },
+  { v: "debt", label: "Debt" },
+  { v: "net", label: "Net worth" },
+  { v: "equipment", label: "Equipment" },
+];
+const OP_OPTS: { v: Op; label: string }[] = [
+  { v: "gte", label: "≥" },
+  { v: "lte", label: "≤" },
+  { v: "gt", label: ">" },
+  { v: "lt", label: "<" },
+  { v: "eq", label: "=" },
+  { v: "neq", label: "≠" },
+];
+const WHEN_OPTS: { v: When; label: string }[] = [
+  { v: "now", label: "right now" },
+  { v: "ever", label: "at some point" },
+  { v: "always", label: "at all times" },
+  { v: "never", label: "never" },
+  { v: "sustained", label: "sustained for…" },
+];
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
@@ -121,6 +152,7 @@ export default function Scenarios({
   const [companions, setCompanions] = useState<Record<string, CompanionData>>(
     {},
   );
+  const [histories, setHistories] = useState<Record<string, Sample[]>>({});
   const [shareText, setShareText] = useState<string | null>(null);
   const [seedMsg, setSeedMsg] = useState<string | null>(null);
   const [editing, setEditing] = useState<Scenario | null>(null);
@@ -160,6 +192,19 @@ export default function Scenarios({
         }),
       );
       setCompanions(comps);
+      // History for scenarios that have engine rules + a linked slot.
+      const hist: Record<string, Sample[]> = {};
+      await Promise.all(
+        s
+          .filter((x) => x.savegameSlot && (x.engineRules?.length ?? 0) > 0)
+          .map(async (x) => {
+            const h = await api
+              .scenarioHistory(x.id, x.savegameSlot!)
+              .catch(() => []);
+            hist[x.id] = h;
+          }),
+      );
+      setHistories(hist);
     } catch (e) {
       setError(String(e));
     }
@@ -505,6 +550,37 @@ export default function Scenarios({
                     </div>
                   ))}
 
+                {(s.engineRules?.length ?? 0) > 0 && (
+                  <div className="engine-rules">
+                    {s.engineRules!.map((r) => {
+                      const st = evaluateRule(r, histories[s.id] ?? []);
+                      const icon =
+                        st.state === "pass"
+                          ? "✓"
+                          : st.state === "fail"
+                            ? "✗"
+                            : st.state === "pending"
+                              ? "•"
+                              : "…";
+                      return (
+                        <div key={r.id} className={"erule " + st.state}>
+                          <span>
+                            {icon} {st.detail}
+                          </span>
+                          {st.progress != null && st.progress < 1 && (
+                            <span className="erule-bar">
+                              <span
+                                className="erule-fill"
+                                style={{ width: `${Math.round(st.progress * 100)}%` }}
+                              />
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
                 {s.deadlineYears != null && (
                   <div
                     className={
@@ -788,6 +864,109 @@ function SeedButton({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Compose engine rules (metric/op/value/when + sustained duration). */
+function RuleBuilder({
+  rules,
+  onChange,
+}: {
+  rules: Rule[];
+  onChange: (r: Rule[]) => void;
+}) {
+  const [d, setD] = useState<Rule>({
+    id: "",
+    metric: "debt",
+    op: "eq",
+    value: 0,
+    when: "sustained",
+    months: 6,
+    consecutive: true,
+  });
+  const add = () => onChange([...rules, { ...d, id: crypto.randomUUID() }]);
+  const remove = (id: string) => onChange(rules.filter((r) => r.id !== id));
+
+  return (
+    <div className="field">
+      Rules (evaluated against your savegame history)
+      <div className="rule-list">
+        {rules.length === 0 && <span className="muted">no rules yet</span>}
+        {rules.map((r) => (
+          <span key={r.id} className="rule-chip">
+            {describeRule(r)}
+            <button
+              type="button"
+              className="chip-x"
+              onClick={() => remove(r.id)}
+            >
+              ✕
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="rule-builder">
+        <select
+          value={d.metric}
+          onChange={(e) => setD({ ...d, metric: e.target.value as Metric })}
+        >
+          {METRIC_OPTS.map((m) => (
+            <option key={m.v} value={m.v}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={d.op}
+          onChange={(e) => setD({ ...d, op: e.target.value as Op })}
+        >
+          {OP_OPTS.map((o) => (
+            <option key={o.v} value={o.v}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <input
+          className="rule-value"
+          type="number"
+          value={d.value}
+          onChange={(e) => setD({ ...d, value: Number(e.target.value) })}
+        />
+        <select
+          value={d.when}
+          onChange={(e) => setD({ ...d, when: e.target.value as When })}
+        >
+          {WHEN_OPTS.map((w) => (
+            <option key={w.v} value={w.v}>
+              {w.label}
+            </option>
+          ))}
+        </select>
+        {d.when === "sustained" && (
+          <>
+            <input
+              className="rule-value"
+              type="number"
+              value={d.months ?? 6}
+              onChange={(e) => setD({ ...d, months: Number(e.target.value) })}
+            />
+            <span className="muted">months</span>
+            <label className="check tiny" title="Clock resets if the condition breaks">
+              <input
+                type="checkbox"
+                checked={d.consecutive !== false}
+                onChange={(e) => setD({ ...d, consecutive: e.target.checked })}
+              />
+              consecutive
+            </label>
+          </>
+        )}
+        <button type="button" className="btn ghost sm" onClick={add}>
+          + Add
+        </button>
+      </div>
+      <span className="hint">Preview: {describeRule({ ...d, id: "x" })}</span>
     </div>
   );
 }
@@ -1140,7 +1319,7 @@ function Editor({
       </label>
 
       <div className="field">
-        Rules (tracked against the savegame, not enforced in-game)
+        Quick rules (single-snapshot, tracked against the savegame)
         <div className="mod-picker short">
           {RULES.map((r) => (
             <label key={r.id} className="pick-row" title={r.hint ?? ""}>
@@ -1154,6 +1333,11 @@ function Editor({
           ))}
         </div>
       </div>
+
+      <RuleBuilder
+        rules={d.engineRules ?? []}
+        onChange={(r) => set({ engineRules: r })}
+      />
 
       {/* A selected rule that needs a supporting mod (e.g. a loan mod for the
           "carry a line of credit" rule) — offer to add or download one. */}

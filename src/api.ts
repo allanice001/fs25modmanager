@@ -1,4 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { Rule, Sample } from "./rules";
+
+export type { Rule, Sample };
 
 export type LinkMode = "symlink" | "hardlink" | "copy";
 
@@ -113,6 +116,8 @@ export interface Scenario {
   savegameSlot: string | null;
   /** Aug–Dec is a free warm-up window; the deadline counts from January. */
   warmupToJanuary?: boolean;
+  /** Rule-engine conditions evaluated against the scenario's history. */
+  engineRules?: Rule[];
 }
 
 export interface SaveInfo {
@@ -240,6 +245,8 @@ export const api = {
     invoke<number>("strip_equipment", { slot, keepBase }),
   readCompanion: (slot: string) =>
     invoke<CompanionData | null>("read_companion", { slot }),
+  scenarioHistory: (scenarioId: string, slot: string) =>
+    invoke<Sample[]>("scenario_history", { scenarioId, slot }),
   getLog: () => invoke<LogEntry[]>("get_log"),
   clearLog: () => invoke<void>("clear_log"),
   appPaths: () => invoke<AppPaths>("app_paths"),

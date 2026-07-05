@@ -18,6 +18,9 @@ ScenarioCompanion = {}
 
 local FILE = "scenarioCompanion.xml"
 local ROOT = "scenarioCompanion"
+local HISTORY_FILE = "scenarioCompanionHistory.xml"
+local HISTORY_ROOT = "scenarioCompanionHistory"
+local HISTORY_CAP = 4000 -- ~11 in-game years of daily samples
 local VERSION = 1
 
 -- Best-effort resolution of the local player's farm id.
@@ -88,10 +91,54 @@ function ScenarioCompanion:write()
     delete(xml)
 end
 
+-- Append one daily sample (day, cash, loan) to the history file, so the manager
+-- can evaluate duration rules ("debt-free for N months") even across sessions.
+function ScenarioCompanion:appendHistory(day)
+    local mission = g_currentMission
+    if mission == nil or mission.missionInfo == nil then return end
+    local dir = mission.missionInfo.savegameDirectory
+    if dir == nil then return end
+    local path = dir .. "/" .. HISTORY_FILE
+
+    local farmId = resolveFarmId()
+    local cash, loan = farmMoneyLoan(farmId)
+
+    local xml, count = nil, 0
+    if fileExists(path) then
+        xml = loadXMLFile(HISTORY_ROOT, path)
+        if xml ~= nil and xml ~= 0 then
+            while hasXMLProperty(xml, string.format("%s.s(%d)", HISTORY_ROOT, count)) do
+                count = count + 1
+            end
+            -- Don't re-record a day we already have (last sample's day).
+            if count > 0 then
+                local lastDay = getXMLInt(xml, string.format("%s.s(%d)#day", HISTORY_ROOT, count - 1))
+                if lastDay == day then
+                    delete(xml)
+                    return
+                end
+            end
+        end
+    end
+    if xml == nil or xml == 0 then
+        xml = createXMLFile(HISTORY_ROOT, path, HISTORY_ROOT)
+        count = 0
+    end
+    if xml == nil or xml == 0 then return end
+
+    local key = string.format("%s.s(%d)", HISTORY_ROOT, count)
+    setXMLInt(xml, key .. "#day", day)
+    setXMLFloat(xml, key .. "#cash", cash)
+    setXMLFloat(xml, key .. "#loan", loan)
+    saveXMLFile(xml)
+    delete(xml)
+end
+
 -- ---- FS mod lifecycle (addModEventListener) --------------------------------
 
 function ScenarioCompanion:loadMap(name)
     self.lastHour = nil
+    self.lastDay = nil
     pcall(function() self:write() end) -- initial snapshot
 end
 
@@ -102,6 +149,11 @@ function ScenarioCompanion:update(dt)
     if self.lastHour == nil or h ~= self.lastHour then
         self.lastHour = h
         pcall(function() self:write() end)
+    end
+    local day = env.currentDay or 0
+    if self.lastDay == nil or day ~= self.lastDay then
+        self.lastDay = day
+        pcall(function() self:appendHistory(day) end)
     end
 end
 

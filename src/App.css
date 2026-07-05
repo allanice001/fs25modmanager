@@ -1128,3 +1128,71 @@ main {
   padding: 3px 8px;
   display: inline-block;
 }
+
+/* ---- Engine rule builder + display ---- */
+.rule-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+.rule-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.rule-builder {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.rule-builder select,
+.rule-builder input {
+  padding: 4px 6px;
+}
+.rule-value {
+  width: 110px;
+}
+.engine-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+}
+.erule {
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.erule.pass {
+  color: var(--accent);
+}
+.erule.fail {
+  color: var(--bad);
+}
+.erule.pending {
+  color: var(--warn);
+}
+.erule.unknown {
+  color: var(--muted);
+}
+.erule-bar {
+  flex: 1;
+  max-width: 140px;
+  height: 6px;
+  background: var(--panel-2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.erule-fill {
+  display: block;
+  height: 100%;
+  background: var(--warn);
+}

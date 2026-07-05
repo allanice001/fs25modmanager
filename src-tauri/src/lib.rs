@@ -242,6 +242,139 @@ fn read_companion(app: AppHandle, slot: String) -> Result<Option<CompanionData>,
     }))
 }
 
+/// One point in a scenario's history — one in-game day.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Sample {
+    day: i64,
+    days_per_period: i64,
+    cash: f64,
+    debt: f64,
+    equipment: f64,
+}
+
+/// Build a scenario's day-ordered history for the rule engine, merging (a) any
+/// persisted history, (b) the companion mod's daily history file, and (c) the
+/// current save snapshot (which alone knows equipment value). The merged result
+/// is persisted per scenario so it accumulates even across sessions / sources.
+#[tauri::command]
+fn scenario_history(
+    app: AppHandle,
+    scenario_id: String,
+    slot: String,
+) -> Result<Vec<Sample>, String> {
+    safe_filename(&slot)?;
+    let key: String = scenario_id
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-')
+        .collect();
+    if key.is_empty() {
+        return Err("bad scenario id".into());
+    }
+    let cfg = load_config(&app)?;
+    let base = game_dir(&cfg).join(&slot);
+    let hist_dir = config_dir(&app)?.join("history");
+    fs::create_dir_all(&hist_dir).ok();
+    let hist_path = hist_dir.join(format!("{key}.json"));
+
+    // In-game calendar: current day + days-per-period.
+    let (cur_day, dpp) = (|| {
+        let env = fs::read_to_string(base.join("environment.xml")).ok()?;
+        let doc = roxmltree::Document::parse(strip_bom(&env)).ok()?;
+        let day = xml_text(&doc, "currentDay")?.parse::<i64>().ok()?;
+        let dpp = xml_text(&doc, "daysPerPeriod")
+            .and_then(|s| s.parse::<i64>().ok())
+            .filter(|d| *d > 0)
+            .unwrap_or(1);
+        Some((day, dpp))
+    })()
+    .unwrap_or((0, 1));
+
+    // Start from persisted history.
+    let mut byday: std::collections::BTreeMap<i64, Sample> = fs::read_to_string(&hist_path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<Sample>>(&s).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| (s.day, s))
+        .collect();
+
+    // Merge the companion's daily history (authoritative cash/debt per day).
+    if let Ok(s) = fs::read_to_string(base.join("scenarioCompanionHistory.xml")) {
+        if let Ok(doc) = roxmltree::Document::parse(strip_bom(&s)) {
+            for n in doc
+                .root_element()
+                .descendants()
+                .filter(|n| n.has_tag_name("s"))
+            {
+                if let Some(day) = n.attribute("day").and_then(|v| v.parse::<i64>().ok()) {
+                    let cash = n
+                        .attribute("cash")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0.0);
+                    let debt = n
+                        .attribute("loan")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0.0);
+                    let equipment = byday.get(&day).map(|x| x.equipment).unwrap_or(0.0);
+                    byday.insert(
+                        day,
+                        Sample {
+                            day,
+                            days_per_period: dpp,
+                            cash,
+                            debt,
+                            equipment,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    // Current save snapshot — the only source with equipment (vehicle) value.
+    if base.join("careerSavegame.xml").exists() {
+        let money = (|| {
+            let s = fs::read_to_string(base.join("careerSavegame.xml")).ok()?;
+            let doc = roxmltree::Document::parse(strip_bom(&s)).ok()?;
+            xml_text(&doc, "money")?.parse::<f64>().ok()
+        })();
+        let (loan, farm_id) = match read_player_farm(&base.join("farms.xml"), money) {
+            Some((l, id)) => (l.unwrap_or(0.0), Some(id)),
+            None => (0.0, None),
+        };
+        let equipment = farm_id
+            .as_ref()
+            .map(|fid| sum_owned_prices(&base.join("vehicles.xml"), fid))
+            .unwrap_or(0.0);
+        byday.insert(
+            cur_day,
+            Sample {
+                day: cur_day,
+                days_per_period: dpp,
+                cash: money.unwrap_or(0.0),
+                debt: loan,
+                equipment,
+            },
+        );
+    }
+
+    // Forward-fill equipment onto companion-only days (which lack it) so "net"
+    // over history isn't jumpy.
+    let mut out: Vec<Sample> = byday.into_values().collect();
+    let mut last_equip = 0.0;
+    for s in out.iter_mut() {
+        if s.equipment > 0.0 {
+            last_equip = s.equipment;
+        } else if last_equip > 0.0 {
+            s.equipment = last_equip;
+        }
+    }
+
+    let _ = fs::write(&hist_path, serde_json::to_string(&out).unwrap_or_default());
+    Ok(out)
+}
+
 fn load_config(app: &AppHandle) -> Result<Config, String> {
     let path = config_dir(app)?.join("config.json");
     if path.exists() {
@@ -1025,6 +1158,28 @@ struct Scenario {
     /// deadline only starts counting from the following January.
     #[serde(default)]
     warmup_to_january: bool,
+    /// Rule-engine conditions (evaluated client-side against the history). Stored
+    /// as pass-through objects; the frontend owns their semantics.
+    #[serde(default)]
+    engine_rules: Vec<EngineRule>,
+}
+
+/// A rule-engine condition, persisted on a scenario. The backend only stores and
+/// returns these; the frontend (rules.ts) defines and evaluates them.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct EngineRule {
+    id: String,
+    metric: String,
+    op: String,
+    value: f64,
+    when: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    months: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    consecutive: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
 }
 
 fn load_scenarios(app: &AppHandle) -> Result<Vec<Scenario>, String> {
@@ -2094,20 +2249,36 @@ fn farms_set_money(farms: &str, money: f64) -> String {
         .into_owned()
 }
 
+/// A vehicle filename that reads like a road-going pickup/truck — the sensible
+/// thing to keep as a "base" vehicle (a leveler or plough is not).
+fn is_base_vehicle(filename: &str) -> bool {
+    let f = filename.to_lowercase();
+    [
+        "pickup",
+        "pickuptruck",
+        "truck",
+        "transporter",
+        "van",
+        "lizard",
+    ]
+    .iter()
+    .any(|k| f.contains(k))
+}
+
 /// Remove every top-level `<vehicle>` owned by `farm_id` from a vehicles.xml
-/// string, returning `(new_xml, removed_count)`. If `keep_cheapest`, the single
-/// lowest-`price` owned vehicle is retained (a "base" starter). Removal is by
-/// each element's exact byte range, so the rest of the file is untouched; a
-/// leading UTF-8 BOM (which FS25 saves carry) is preserved.
-fn strip_farm_vehicles(xml: &str, farm_id: &str, keep_cheapest: bool) -> (String, usize) {
+/// string, returning `(new_xml, removed_count)`. If `keep_base`, one starter
+/// vehicle is retained — preferring a pickup/truck (cheapest such), else the
+/// cheapest vehicle overall. Removal is by each element's exact byte range, so
+/// the rest of the file is untouched; a leading UTF-8 BOM is preserved.
+fn strip_farm_vehicles(xml: &str, farm_id: &str, keep_base: bool) -> (String, usize) {
     let had_bom = xml.starts_with('\u{feff}');
     let src = strip_bom(xml);
     let doc = match roxmltree::Document::parse(src) {
         Ok(d) => d,
         Err(_) => return (xml.to_string(), 0),
     };
-    // (byte range, price) for each vehicle on the player's farm.
-    let mut owned: Vec<(std::ops::Range<usize>, f64)> = doc
+    // (byte range, price, is-truck) for each vehicle on the player's farm.
+    let mut owned: Vec<(std::ops::Range<usize>, f64, bool)> = doc
         .root_element()
         .children()
         .filter(|n| n.has_tag_name("vehicle") && n.attribute("farmId") == Some(farm_id))
@@ -2116,17 +2287,23 @@ fn strip_farm_vehicles(xml: &str, farm_id: &str, keep_cheapest: bool) -> (String
                 .attribute("price")
                 .and_then(|v| v.parse::<f64>().ok())
                 .unwrap_or(0.0);
-            (n.range(), price)
+            let truck = n
+                .attribute("filename")
+                .map(is_base_vehicle)
+                .unwrap_or(false);
+            (n.range(), price, truck)
         })
         .collect();
     if owned.is_empty() {
         return (xml.to_string(), 0);
     }
-    // Optionally keep the cheapest one.
-    let keep_idx = if keep_cheapest {
+    // Keep a base vehicle: cheapest pickup/truck if any, else cheapest overall.
+    let keep_idx = if keep_base {
+        let has_truck = owned.iter().any(|(_, _, t)| *t);
         owned
             .iter()
             .enumerate()
+            .filter(|(_, (_, _, t))| !has_truck || *t)
             .min_by(|a, b| a.1 .1.total_cmp(&b.1 .1))
             .map(|(i, _)| i)
     } else {
@@ -2136,7 +2313,7 @@ fn strip_farm_vehicles(xml: &str, farm_id: &str, keep_cheapest: bool) -> (String
         .drain(..)
         .enumerate()
         .filter(|(i, _)| Some(*i) != keep_idx)
-        .map(|(_, (r, _))| r)
+        .map(|(_, (r, _, _))| r)
         .collect();
     ranges.sort_by_key(|r| r.start);
 
@@ -2520,6 +2697,19 @@ mod tests {
         assert!(none.contains("npc"));
     }
 
+    #[test]
+    fn keep_base_prefers_a_truck_over_cheaper_tools() {
+        // A cheap leveler and a pricier pickup: keep the pickup, not the leveler.
+        let xml = "<vehicles>\n\
+            <vehicle farmId=\"1\" price=\"5000\" filename=\"data/leveler.xml\"/>\n\
+            <vehicle farmId=\"1\" price=\"26000\" filename=\"data/lizardPickup.xml\"/>\n\
+            </vehicles>";
+        let (out, n) = strip_farm_vehicles(xml, "1", true);
+        assert_eq!(n, 1);
+        assert!(out.contains("lizardPickup")); // truck kept
+        assert!(!out.contains("leveler")); // leveler removed despite being cheaper
+    }
+
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn cli_path_includes_homebrew_dirs() {
@@ -2618,6 +2808,7 @@ pub fn run() {
             app_paths,
             open_folder,
             read_companion,
+            scenario_history,
             get_templates,
             set_template,
             farm_overview,
