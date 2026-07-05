@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   api,
+  CompanionData,
   ModHubEntry,
   ModItem,
   SaveInfo,
@@ -117,6 +118,9 @@ export default function Scenarios({
   const [slots, setSlots] = useState<SlotInfo[]>([]);
   const [templates, setTemplates] = useState<Record<string, string>>({});
   const [catalog, setCatalog] = useState<ModHubEntry[]>([]);
+  const [companions, setCompanions] = useState<Record<string, CompanionData>>(
+    {},
+  );
   const [shareText, setShareText] = useState<string | null>(null);
   const [seedMsg, setSeedMsg] = useState<string | null>(null);
   const [editing, setEditing] = useState<Scenario | null>(null);
@@ -142,6 +146,20 @@ export default function Scenarios({
       setSlots(sl);
       setTemplates(tpl);
       setCatalog(cat);
+      // Live telemetry from the in-game companion mod, for linked slots.
+      const linked = [
+        ...new Set(
+          s.map((x) => x.savegameSlot).filter((v): v is string => !!v),
+        ),
+      ];
+      const comps: Record<string, CompanionData> = {};
+      await Promise.all(
+        linked.map(async (slot) => {
+          const c = await api.readCompanion(slot).catch(() => null);
+          if (c) comps[slot] = c;
+        }),
+      );
+      setCompanions(comps);
     } catch (e) {
       setError(String(e));
     }
@@ -431,6 +449,29 @@ export default function Scenarios({
                     )}
                   </div>
                 )}
+
+                {s.savegameSlot &&
+                  companions[s.savegameSlot] &&
+                  (() => {
+                    const c = companions[s.savegameSlot!];
+                    const fresh =
+                      c.updatedMs != null &&
+                      Date.now() - c.updatedMs < 5 * 60 * 1000;
+                    return (
+                      <div
+                        className="live-telemetry"
+                        title="Live from the Scenario Companion in-game mod (updates each in-game hour while you play)"
+                      >
+                        {fresh ? "🟢" : "⚪"} Live
+                        {c.money != null && ` · ${money(c.money)}`}
+                        {c.day != null && ` · Day ${c.day}`}
+                        {c.loan != null && c.loan > 0 && ` · debt ${money(c.loan)}`}
+                        {!fresh && (
+                          <span className="muted"> · from last session</span>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                 {s.rules.length > 0 && (
                   <div className="rules">

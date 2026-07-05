@@ -1116,3 +1116,15 @@ main {
 .dev-log-row.warn .dev-log-msg {
   color: var(--warn);
 }
+
+/* ---- Live telemetry (companion mod) ---- */
+.live-telemetry {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 8px;
+  display: inline-block;
+}

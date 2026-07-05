@@ -199,6 +199,49 @@ fn open_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Live telemetry written by the FS25_ScenarioCompanion in-game mod into
+/// `<savegame>/scenarioCompanion.xml` each in-game hour.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompanionData {
+    money: Option<f64>,
+    loan: Option<f64>,
+    day: Option<i64>,
+    days_per_period: Option<i64>,
+    period: Option<i64>,
+    hour: Option<i64>,
+    /// File modified time (ms since epoch, wall clock) — for freshness.
+    updated_ms: Option<u64>,
+}
+
+#[tauri::command]
+fn read_companion(app: AppHandle, slot: String) -> Result<Option<CompanionData>, String> {
+    safe_filename(&slot)?;
+    let cfg = load_config(&app)?;
+    let path = game_dir(&cfg).join(&slot).join("scenarioCompanion.xml");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let s = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let doc = roxmltree::Document::parse(strip_bom(&s)).map_err(|e| e.to_string())?;
+    let num = |tag: &str| xml_text(&doc, tag).and_then(|v| v.parse::<f64>().ok());
+    let int = |tag: &str| xml_text(&doc, tag).and_then(|v| v.parse::<i64>().ok());
+    let updated_ms = fs::metadata(&path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64);
+    Ok(Some(CompanionData {
+        money: num("money"),
+        loan: num("loan"),
+        day: int("day"),
+        days_per_period: int("daysPerPeriod"),
+        period: int("period"),
+        hour: int("hour"),
+        updated_ms,
+    }))
+}
+
 fn load_config(app: &AppHandle) -> Result<Config, String> {
     let path = config_dir(app)?.join("config.json");
     if path.exists() {
@@ -2555,6 +2598,7 @@ pub fn run() {
             clear_log,
             app_paths,
             open_folder,
+            read_companion,
             get_templates,
             set_template,
             farm_overview,

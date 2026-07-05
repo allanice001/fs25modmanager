@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<modDesc descVersion="98">
+    <author>Johan Allan Swanepoel</author>
+    <version>0.1.0.0</version>
+    <title>
+        <en>Scenario Companion (FS25 Mod Manager)</en>
+    </title>
+    <description>
+        <en><![CDATA[Writes live scenario telemetry (money, loan, in-game day) to your savegame folder each in-game hour, so the FS25 Mod Manager can track your run in real time. Telemetry only — it never changes gameplay.]]></en>
+    </description>
+    <iconFilename>icon.dds</iconFilename>
+    <multiplayer supported="false"/>
+    <extraSourceFiles>
+        <sourceFile filename="scripts/ScenarioCompanion.lua"/>
+    </extraSourceFiles>
+</modDesc>

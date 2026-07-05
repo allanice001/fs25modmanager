@@ -24,6 +24,18 @@ export interface AppPaths {
   logFile: string;
 }
 
+/** Live telemetry from the FS25_ScenarioCompanion in-game mod. */
+export interface CompanionData {
+  money: number | null;
+  loan: number | null;
+  day: number | null;
+  daysPerPeriod: number | null;
+  period: number | null;
+  hour: number | null;
+  /** File mtime in ms (wall clock) — for freshness. */
+  updatedMs: number | null;
+}
+
 export interface ItemMeta {
   kind: string;
   category: string;
@@ -226,6 +238,8 @@ export const api = {
     invoke<void>("clone_savegame", { fromSlot, toSlot }),
   stripEquipment: (slot: string, keepBase: boolean) =>
     invoke<number>("strip_equipment", { slot, keepBase }),
+  readCompanion: (slot: string) =>
+    invoke<CompanionData | null>("read_companion", { slot }),
   getLog: () => invoke<LogEntry[]>("get_log"),
   clearLog: () => invoke<void>("clear_log"),
   appPaths: () => invoke<AppPaths>("app_paths"),
