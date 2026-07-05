@@ -238,6 +238,7 @@ export default function Scenarios({
     equip: EquipMode,
     keepVehicle: string | null,
     allowance: number,
+    resetClock: boolean,
   ) {
     // A from-scratch scenario expects the source to be a fresh save (made via
     // FS25's "Start From Scratch"). Judge that by owned *equipment* value, not
@@ -278,6 +279,7 @@ export default function Scenarios({
                 : "."),
         );
       }
+      if (resetClock) await api.resetClock(to);
       await refreshSaves();
     });
   }
@@ -650,8 +652,8 @@ export default function Scenarios({
                   templateSlot={s.map ? templates[mapKeyOfFile(s.map)] : undefined}
                   busy={busy}
                   onRefreshSaves={refreshSaves}
-                  onSeed={(from, to, equip, keep, allowance) =>
-                    seedSave(s, from, to, equip, keep, allowance)
+                  onSeed={(from, to, equip, keep, allowance, reset) =>
+                    seedSave(s, from, to, equip, keep, allowance, reset)
                   }
                 />
                 <button
@@ -792,6 +794,7 @@ function SeedButton({
     equip: EquipMode,
     keepVehicle: string | null,
     allowance: number,
+    resetClock: boolean,
   ) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -810,6 +813,8 @@ function SeedButton({
   const [vehicles, setVehicles] = useState<VehicleInfo[]>([]);
   const [keepVehicle, setKeepVehicle] = useState("");
   const [allowance, setAllowance] = useState(25000);
+  // From-scratch seeds default to resetting the clock to a fresh start.
+  const [resetClock, setResetClock] = useState(zeroStart);
   useEffect(() => {
     if (equip !== "one" || !from) return;
     api
@@ -920,6 +925,17 @@ function SeedButton({
                   />
                 </label>
               )}
+              <label
+                className="check tiny"
+                title="Reset the in-game clock to a fresh August start, so the deadline counts from day one (recommended when cloning a played template)"
+              >
+                <input
+                  type="checkbox"
+                  checked={resetClock}
+                  onChange={(e) => setResetClock(e.target.checked)}
+                />
+                ⏱ reset clock
+              </label>
               <button
                 className="btn sm"
                 disabled={busy || !from || !to || (equip === "one" && !keepVehicle)}
@@ -930,6 +946,7 @@ function SeedButton({
                     equip,
                     equip === "one" ? keepVehicle : null,
                     allowance,
+                    resetClock,
                   );
                   setOpen(false);
                 }}

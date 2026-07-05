@@ -252,6 +252,7 @@ export const api = {
     invoke<VehicleInfo[]>("list_vehicles", { slot }),
   stripEquipment: (slot: string, keep: string | null) =>
     invoke<number>("strip_equipment", { slot, keep }),
+  resetClock: (slot: string) => invoke<number>("reset_clock", { slot }),
   readCompanion: (slot: string) =>
     invoke<CompanionData | null>("read_companion", { slot }),
   scenarioHistory: (scenarioId: string, slot: string) =>

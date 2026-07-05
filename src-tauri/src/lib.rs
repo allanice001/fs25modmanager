@@ -2249,6 +2249,20 @@ fn farms_set_money(farms: &str, money: f64) -> String {
         .into_owned()
 }
 
+/// Set both `<currentDay>` and `<currentMonotonicDay>` in an environment.xml
+/// string to `day`.
+fn set_env_day(env: &str, day: i64) -> String {
+    let d = regex::Regex::new(r"<currentDay>[^<]*</currentDay>").expect("valid regex");
+    let m = regex::Regex::new(r"<currentMonotonicDay>[^<]*</currentMonotonicDay>")
+        .expect("valid regex");
+    let s = d.replace(env, format!("<currentDay>{day}</currentDay>").as_str());
+    m.replace(
+        &s,
+        format!("<currentMonotonicDay>{day}</currentMonotonicDay>").as_str(),
+    )
+    .into_owned()
+}
+
 /// A vehicle filename that reads like a road-going pickup/truck — the sensible
 /// A vehicle's short name: the filename's basename without the `.xml`
 /// (e.g. `data/vehicles/mes400.xml` → `mes400`).
@@ -2399,6 +2413,34 @@ fn strip_equipment(app: AppHandle, slot: String, keep: Option<String>) -> Result
         ),
     );
     Ok(removed)
+}
+
+/// Reset a save's in-game clock to a fresh August start (day = 5·daysPerPeriod
+/// + 1, which the year math reads as 0 elapsed), backing it up first. Intended
+/// for from-scratch seeds cloned from a played template.
+#[tauri::command]
+fn reset_clock(app: AppHandle, slot: String) -> Result<i64, String> {
+    safe_filename(&slot)?;
+    let cfg = load_config(&app)?;
+    let env_path = game_dir(&cfg).join(&slot).join("environment.xml");
+    if !env_path.exists() {
+        return Err("no environment.xml in that slot".into());
+    }
+    backup_savegame(app.clone(), slot.clone())?;
+    let env = fs::read_to_string(&env_path).map_err(|e| e.to_string())?;
+    let dpp = roxmltree::Document::parse(strip_bom(&env))
+        .ok()
+        .and_then(|d| xml_text(&d, "daysPerPeriod").and_then(|s| s.parse::<i64>().ok()))
+        .filter(|d| *d > 0)
+        .unwrap_or(1);
+    let fresh = 5 * dpp + 1;
+    fs::write(&env_path, set_env_day(&env, fresh)).map_err(|e| e.to_string())?;
+    log_line(
+        &app,
+        "info",
+        &format!("reset clock in {slot} to day {fresh}"),
+    );
+    Ok(fresh)
 }
 
 fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
@@ -2729,6 +2771,18 @@ mod tests {
         assert_eq!(n3, 2);
     }
 
+    #[test]
+    fn resets_env_day() {
+        let env = "<environment>\
+            <currentDay>27</currentDay>\
+            <currentMonotonicDay>27</currentMonotonicDay>\
+            <daysPerPeriod>1</daysPerPeriod></environment>";
+        let out = set_env_day(env, 6);
+        assert!(out.contains("<currentDay>6</currentDay>"));
+        assert!(out.contains("<currentMonotonicDay>6</currentMonotonicDay>"));
+        assert!(!out.contains("27"));
+    }
+
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn cli_path_includes_homebrew_dirs() {
@@ -2823,6 +2877,7 @@ pub fn run() {
             clone_savegame,
             strip_equipment,
             list_vehicles,
+            reset_clock,
             get_log,
             clear_log,
             app_paths,
