@@ -11,7 +11,6 @@ import {
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   PRESETS,
-  RULE_CONFLICTS,
   RULES,
   ruleById,
   scenarioFromPreset,
@@ -492,13 +491,6 @@ export default function Scenarios({
                     })}
                   </div>
                 )}
-                {s.rules.some((r) => s.rules.includes(RULE_CONFLICTS[r])) && (
-                  <div className="warn">
-                    ⚠ Conflicting rules — this scenario requires debt and
-                    debt-free at once, so it can never be satisfied. Edit and keep
-                    only one.
-                  </div>
-                )}
                 {s.rules
                   .map((rid) => ruleById(rid))
                   .filter((r) => r?.needsMod)
@@ -893,8 +885,7 @@ function Editor({
     set({
       rules: d.rules.includes(id)
         ? d.rules.filter((r) => r !== id)
-        : // Adding a rule drops any rule it contradicts (e.g. debt vs debt-free).
-          [...d.rules.filter((r) => r !== RULE_CONFLICTS[id]), id],
+        : [...d.rules, id],
     });
 
   // Pick a random 2–6 mod starting kit from the whole library.
