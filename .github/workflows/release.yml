@@ -24,15 +24,15 @@ jobs:
             args: ""
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 11
 
       - name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
@@ -79,6 +79,10 @@ jobs:
   mirror:
     needs: build
     runs-on: ubuntu-latest
+    # Draft releases are only visible to a token with push access, so the
+    # GITHUB_TOKEN used below must have contents:write to find the draft.
+    permissions:
+      contents: write
     steps:
       - name: Download assets from the private draft release
         env:
@@ -92,6 +96,10 @@ jobs:
           REL=$(gh api "repos/$REPO/releases" --paginate \
             --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -1)
           echo "release id: $REL"
+          if [ -z "$REL" ]; then
+            echo "::error::no release found for tag $TAG (is the draft visible to this token?)"
+            exit 1
+          fi
           gh api "repos/$REPO/releases/$REL/assets" --paginate \
             --jq '.[] | "\(.id)\t\(.name)"' | while IFS=$'\t' read -r id name; do
             echo "downloading $name"
