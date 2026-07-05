@@ -44,6 +44,26 @@ export interface RuleStatus {
   detail: string;
 }
 
+/** One-click starter rules for the builder. */
+export const RULE_PRESETS: { label: string; rule: Omit<Rule, "id"> }[] = [
+  {
+    label: "Debt-free 6mo",
+    rule: { metric: "debt", op: "eq", value: 0, when: "sustained", months: 6, consecutive: true },
+  },
+  {
+    label: "Never bankrupt",
+    rule: { metric: "cash", op: "lt", value: 0, when: "never" },
+  },
+  {
+    label: "Carry credit (ever)",
+    rule: { metric: "debt", op: "gt", value: 0, when: "ever" },
+  },
+  {
+    label: "Hold $1M net 3mo",
+    rule: { metric: "net", op: "gte", value: 1_000_000, when: "sustained", months: 3, consecutive: true },
+  },
+];
+
 const EPS = 0.5; // money is float; treat sub-dollar diffs as equal
 
 export function metricValue(s: Sample, m: Metric): number {

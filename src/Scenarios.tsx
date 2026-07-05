@@ -26,6 +26,7 @@ import {
   Metric,
   Op,
   When,
+  RULE_PRESETS,
   describeRule,
   evaluateRule,
 } from "./rules";
@@ -888,9 +889,26 @@ function RuleBuilder({
   const add = () => onChange([...rules, { ...d, id: crypto.randomUUID() }]);
   const remove = (id: string) => onChange(rules.filter((r) => r.id !== id));
 
+  const addPreset = (r: Omit<Rule, "id">) =>
+    onChange([...rules, { ...r, id: crypto.randomUUID() }]);
+
   return (
     <div className="field">
       Rules (evaluated against your savegame history)
+      <div className="rule-presets">
+        <span className="muted">quick add:</span>
+        {RULE_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            className="btn ghost sm"
+            title={describeRule({ ...p.rule, id: "x" })}
+            onClick={() => addPreset(p.rule)}
+          >
+            + {p.label}
+          </button>
+        ))}
+      </div>
       <div className="rule-list">
         {rules.length === 0 && <span className="muted">no rules yet</span>}
         {rules.map((r) => (
