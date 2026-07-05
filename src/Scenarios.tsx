@@ -48,8 +48,9 @@ const money = (n: number) =>
 const WARMUP_YEARS = 5 / 12;
 
 /** What to do with the seeded save's equipment: keep it all, keep only one
- *  chosen vehicle, or remove all owned vehicles for a bare start. */
-type EquipMode = "keep" | "one" | "none";
+ *  chosen vehicle, remove all for a bare start, or remove all and seed a cash
+ *  allowance so the player buys their own first vehicle. */
+type EquipMode = "keep" | "one" | "none" | "allowance";
 
 const METRIC_OPTS: { v: Metric; label: string }[] = [
   { v: "cash", label: "Cash" },
@@ -236,6 +237,7 @@ export default function Scenarios({
     to: string,
     equip: EquipMode,
     keepVehicle: string | null,
+    allowance: number,
   ) {
     // A from-scratch scenario expects the source to be a fresh save (made via
     // FS25's "Start From Scratch"). Judge that by owned *equipment* value, not
@@ -260,13 +262,20 @@ export default function Scenarios({
     }
     await guard(async () => {
       await api.cloneSavegame(from, to);
-      await api.patchSavegame(to, scenario.name || null, scenario.startMoney);
+      // "allowance" mode seeds cash to buy a first vehicle; else the scenario's.
+      const seedMoney =
+        equip === "allowance" ? allowance : scenario.startMoney;
+      await api.patchSavegame(to, scenario.name || null, seedMoney);
       if (equip !== "keep") {
         const keep = equip === "one" ? keepVehicle : null;
         const n = await api.stripEquipment(to, keep);
         setSeedMsg(
           `Seeded ${to}: removed ${n} vehicle${n === 1 ? "" : "s"}` +
-            (keep ? ` (kept ${keep}).` : "."),
+            (keep
+              ? ` (kept ${keep}).`
+              : equip === "allowance"
+                ? ` — seeded ${money(allowance)} to buy your own.`
+                : "."),
         );
       }
       await refreshSaves();
@@ -641,8 +650,8 @@ export default function Scenarios({
                   templateSlot={s.map ? templates[mapKeyOfFile(s.map)] : undefined}
                   busy={busy}
                   onRefreshSaves={refreshSaves}
-                  onSeed={(from, to, equip, keep) =>
-                    seedSave(s, from, to, equip, keep)
+                  onSeed={(from, to, equip, keep, allowance) =>
+                    seedSave(s, from, to, equip, keep, allowance)
                   }
                 />
                 <button
@@ -782,6 +791,7 @@ function SeedButton({
     to: string,
     equip: EquipMode,
     keepVehicle: string | null,
+    allowance: number,
   ) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -799,6 +809,7 @@ function SeedButton({
   // Vehicles in the chosen source save, for the "keep one vehicle" picker.
   const [vehicles, setVehicles] = useState<VehicleInfo[]>([]);
   const [keepVehicle, setKeepVehicle] = useState("");
+  const [allowance, setAllowance] = useState(25000);
   useEffect(() => {
     if (equip !== "one" || !from) return;
     api
@@ -873,6 +884,7 @@ function SeedButton({
                 <option value="keep">🚜 Keep equipment</option>
                 <option value="one">🚜 Keep one vehicle…</option>
                 <option value="none">🚜 Remove all equipment</option>
+                <option value="allowance">💰 Cash for a vehicle…</option>
               </select>
               {equip === "one" && (
                 <select
@@ -888,11 +900,31 @@ function SeedButton({
                   ))}
                 </select>
               )}
+              {equip === "allowance" && (
+                <label
+                  className="allowance"
+                  title="Remove all vehicles and seed this much cash so you buy your own first vehicle"
+                >
+                  $
+                  <input
+                    className="rule-value"
+                    type="number"
+                    value={allowance}
+                    onChange={(e) => setAllowance(Number(e.target.value))}
+                  />
+                </label>
+              )}
               <button
                 className="btn sm"
                 disabled={busy || !from || !to || (equip === "one" && !keepVehicle)}
                 onClick={() => {
-                  onSeed(from, to, equip, equip === "one" ? keepVehicle : null);
+                  onSeed(
+                    from,
+                    to,
+                    equip,
+                    equip === "one" ? keepVehicle : null,
+                    allowance,
+                  );
                   setOpen(false);
                 }}
               >
