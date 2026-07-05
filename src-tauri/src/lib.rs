@@ -1307,27 +1307,16 @@ fn clean_from_mods(cfg: &Config, name: &str) -> Result<(), String> {
 /// telemetry mod is always present.
 const COMPANION_MOD: &str = "FS25_ScenarioCompanion.zip";
 
-/// Path to the bundled companion mod zip inside the app's resources, if present.
-fn companion_resource(app: &AppHandle) -> Option<PathBuf> {
-    app.path()
-        .resolve(
-            "resources/FS25_ScenarioCompanion.zip",
-            tauri::path::BaseDirectory::Resource,
-        )
-        .ok()
-        .filter(|p| p.exists())
-}
+/// The companion mod zip, embedded into the binary at compile time so it's
+/// available identically in `tauri dev` and production (no resource-dir lookup).
+const COMPANION_ZIP: &[u8] = include_bytes!("../resources/FS25_ScenarioCompanion.zip");
 
-/// Copy the bundled companion mod into the game's mods folder (overwriting, so
-/// updates propagate). Best-effort: no-ops if the resource is absent (e.g. a dev
-/// build without bundled resources).
-fn place_companion(app: &AppHandle, cfg: &Config) -> Result<(), String> {
-    let Some(src) = companion_resource(app) else {
-        return Ok(());
-    };
-    fs::create_dir_all(&cfg.mods_dir).ok();
+/// Write the embedded companion mod into the game's mods folder (overwriting, so
+/// updates propagate).
+fn place_companion(cfg: &Config) -> Result<(), String> {
+    fs::create_dir_all(&cfg.mods_dir).map_err(|e| e.to_string())?;
     let dst = PathBuf::from(&cfg.mods_dir).join(COMPANION_MOD);
-    fs::copy(&src, &dst).map_err(|e| e.to_string())?;
+    fs::write(&dst, COMPANION_ZIP).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1371,7 +1360,7 @@ fn apply_scenario(app: AppHandle, id: String, exclusive: bool) -> Result<(), Str
         apply_enabled(&cfg, f, true)?;
     }
     // The telemetry companion is always active during a scenario.
-    place_companion(&app, &cfg)?;
+    place_companion(&cfg)?;
 
     cfg.active_map = scenario.map.clone();
     write_config(&app, &cfg)?;
