@@ -2250,70 +2250,52 @@ fn farms_set_money(farms: &str, money: f64) -> String {
 }
 
 /// A vehicle filename that reads like a road-going pickup/truck — the sensible
-/// thing to keep as a "base" vehicle (a leveler or plough is not).
-fn is_base_vehicle(filename: &str) -> bool {
-    let f = filename.to_lowercase();
-    [
-        "pickup",
-        "pickuptruck",
-        "truck",
-        "transporter",
-        "van",
-        "lizard",
-    ]
-    .iter()
-    .any(|k| f.contains(k))
+/// A vehicle's short name: the filename's basename without the `.xml`
+/// (e.g. `data/vehicles/mes400.xml` → `mes400`).
+fn veh_basename(filename: &str) -> String {
+    filename
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(filename)
+        .trim_end_matches(".xml")
+        .to_string()
 }
 
 /// Remove every top-level `<vehicle>` owned by `farm_id` from a vehicles.xml
-/// string, returning `(new_xml, removed_count)`. If `keep_base`, one starter
-/// vehicle is retained — preferring a pickup/truck (cheapest such), else the
-/// cheapest vehicle overall. Removal is by each element's exact byte range, so
-/// the rest of the file is untouched; a leading UTF-8 BOM is preserved.
-fn strip_farm_vehicles(xml: &str, farm_id: &str, keep_base: bool) -> (String, usize) {
+/// string, returning `(new_xml, removed_count)`. If `keep` names a vehicle
+/// (basename), the first matching one is retained; otherwise all are removed.
+/// Removal is by each element's exact byte range, so the rest of the file is
+/// untouched; a leading UTF-8 BOM is preserved.
+fn strip_farm_vehicles(xml: &str, farm_id: &str, keep: Option<&str>) -> (String, usize) {
     let had_bom = xml.starts_with('\u{feff}');
     let src = strip_bom(xml);
     let doc = match roxmltree::Document::parse(src) {
         Ok(d) => d,
         Err(_) => return (xml.to_string(), 0),
     };
-    // (byte range, price, is-truck) for each vehicle on the player's farm.
-    let mut owned: Vec<(std::ops::Range<usize>, f64, bool)> = doc
+    // (byte range, basename) for each vehicle on the player's farm.
+    let owned: Vec<(std::ops::Range<usize>, String)> = doc
         .root_element()
         .children()
         .filter(|n| n.has_tag_name("vehicle") && n.attribute("farmId") == Some(farm_id))
         .map(|n| {
-            let price = n
-                .attribute("price")
-                .and_then(|v| v.parse::<f64>().ok())
-                .unwrap_or(0.0);
-            let truck = n
+            let name = n
                 .attribute("filename")
-                .map(is_base_vehicle)
-                .unwrap_or(false);
-            (n.range(), price, truck)
+                .map(veh_basename)
+                .unwrap_or_default();
+            (n.range(), name)
         })
         .collect();
     if owned.is_empty() {
         return (xml.to_string(), 0);
     }
-    // Keep a base vehicle: cheapest pickup/truck if any, else cheapest overall.
-    let keep_idx = if keep_base {
-        let has_truck = owned.iter().any(|(_, _, t)| *t);
-        owned
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, _, t))| !has_truck || *t)
-            .min_by(|a, b| a.1 .1.total_cmp(&b.1 .1))
-            .map(|(i, _)| i)
-    } else {
-        None
-    };
+    // Keep the first vehicle whose basename matches `keep`, if any.
+    let keep_idx = keep.and_then(|k| owned.iter().position(|(_, name)| name == k));
     let mut ranges: Vec<std::ops::Range<usize>> = owned
-        .drain(..)
+        .into_iter()
         .enumerate()
         .filter(|(i, _)| Some(*i) != keep_idx)
-        .map(|(_, (r, _, _))| r)
+        .map(|(_, (r, _))| r)
         .collect();
     ranges.sort_by_key(|r| r.start);
 
@@ -2332,11 +2314,65 @@ fn strip_farm_vehicles(xml: &str, farm_id: &str, keep_base: bool) -> (String, us
     (result, ranges.len())
 }
 
-/// Remove the player's owned vehicles from a seeded/existing save (backing it up
-/// first). `keep_base` retains the single cheapest vehicle. Returns how many
-/// were removed.
+/// Read the player's farm id for a save (best-effort, defaults to "1").
+fn player_farm_id(dir: &Path) -> String {
+    let money = (|| {
+        let s = fs::read_to_string(dir.join("careerSavegame.xml")).ok()?;
+        let doc = roxmltree::Document::parse(strip_bom(&s)).ok()?;
+        xml_text(&doc, "money")?.parse::<f64>().ok()
+    })();
+    read_player_farm(&dir.join("farms.xml"), money)
+        .map(|(_, id)| id)
+        .unwrap_or_else(|| "1".into())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VehicleInfo {
+    /// Basename without `.xml` — the id used to keep it.
+    name: String,
+    price: f64,
+}
+
+/// List the player's owned vehicles in a save (name + price, cheapest first) so
+/// the user can choose which one to keep when seeding.
 #[tauri::command]
-fn strip_equipment(app: AppHandle, slot: String, keep_base: bool) -> Result<usize, String> {
+fn list_vehicles(app: AppHandle, slot: String) -> Result<Vec<VehicleInfo>, String> {
+    safe_filename(&slot)?;
+    let cfg = load_config(&app)?;
+    let dir = game_dir(&cfg).join(&slot);
+    let farm_id = player_farm_id(&dir);
+    let mut out = Vec::new();
+    if let Ok(s) = fs::read_to_string(dir.join("vehicles.xml")) {
+        if let Ok(doc) = roxmltree::Document::parse(strip_bom(&s)) {
+            for n in doc.root_element().children() {
+                if !n.has_tag_name("vehicle") || n.attribute("farmId") != Some(farm_id.as_str()) {
+                    continue;
+                }
+                if matches!(n.attribute("propertyState"), Some(x) if x != "OWNED") {
+                    continue;
+                }
+                let name = n
+                    .attribute("filename")
+                    .map(veh_basename)
+                    .unwrap_or_default();
+                let price = n
+                    .attribute("price")
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(0.0);
+                out.push(VehicleInfo { name, price });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.price.total_cmp(&b.price));
+    Ok(out)
+}
+
+/// Remove the player's owned vehicles from a seeded/existing save (backing it up
+/// first). `keep` names one vehicle (basename) to retain; None removes them all.
+/// Returns how many were removed.
+#[tauri::command]
+fn strip_equipment(app: AppHandle, slot: String, keep: Option<String>) -> Result<usize, String> {
     safe_filename(&slot)?;
     let cfg = load_config(&app)?;
     let dir = game_dir(&cfg).join(&slot);
@@ -2350,24 +2386,16 @@ fn strip_equipment(app: AppHandle, slot: String, keep_base: bool) -> Result<usiz
     // Snapshot before editing so a bad strip is one click to restore.
     backup_savegame(app.clone(), slot.clone())?;
 
-    let money = (|| {
-        let s = fs::read_to_string(dir.join("careerSavegame.xml")).ok()?;
-        let doc = roxmltree::Document::parse(strip_bom(&s)).ok()?;
-        xml_text(&doc, "money")?.parse::<f64>().ok()
-    })();
-    let farm_id = read_player_farm(&dir.join("farms.xml"), money)
-        .map(|(_, id)| id)
-        .unwrap_or_else(|| "1".into());
-
+    let farm_id = player_farm_id(&dir);
     let xml = fs::read_to_string(&vpath).map_err(|e| e.to_string())?;
-    let (new_xml, removed) = strip_farm_vehicles(&xml, &farm_id, keep_base);
+    let (new_xml, removed) = strip_farm_vehicles(&xml, &farm_id, keep.as_deref());
     fs::write(&vpath, new_xml).map_err(|e| e.to_string())?;
     log_line(
         &app,
         "info",
         &format!(
             "stripped {removed} vehicle(s) from {slot}{}",
-            if keep_base { " (kept base)" } else { "" }
+            keep.map(|k| format!(" (kept {k})")).unwrap_or_default()
         ),
     );
     Ok(removed)
@@ -2677,37 +2705,28 @@ mod tests {
     }
 
     #[test]
-    fn strips_owned_vehicles_both_modes() {
+    fn strips_owned_vehicles_keep_named_or_all() {
+        // A leveler and a pickup on the player farm, plus an NPC vehicle.
         let xml = "\u{feff}<vehicles>\n\
-            <vehicle farmId=\"1\" price=\"26000\" filename=\"a\"/>\n\
-            <vehicle farmId=\"1\" price=\"100000\" filename=\"b\"/>\n\
-            <vehicle farmId=\"0\" price=\"5\" filename=\"npc\"/>\n\
+            <vehicle farmId=\"1\" price=\"5000\" filename=\"data/mes400.xml\"/>\n\
+            <vehicle farmId=\"1\" price=\"26000\" filename=\"data/pickup.xml\"/>\n\
+            <vehicle farmId=\"0\" price=\"5\" filename=\"npc.xml\"/>\n\
             </vehicles>";
-        // keep cheapest: drops the $100k, keeps the $26k and the NPC vehicle
-        let (kept, n) = strip_farm_vehicles(xml, "1", true);
+        // Keep the chosen pickup, drop the leveler (even though it's cheaper).
+        let (kept, n) = strip_farm_vehicles(xml, "1", Some("pickup"));
         assert_eq!(n, 1);
-        assert!(kept.contains("price=\"26000\""));
-        assert!(!kept.contains("price=\"100000\""));
-        assert!(kept.contains("npc"));
+        assert!(kept.contains("pickup"));
+        assert!(!kept.contains("mes400"));
+        assert!(kept.contains("npc")); // farm 0 untouched
         assert!(kept.starts_with('\u{feff}')); // BOM preserved
-                                               // remove all: no farm-1 vehicles remain, NPC untouched
-        let (none, n2) = strip_farm_vehicles(xml, "1", false);
+                                               // Remove all farm-1 vehicles.
+        let (none, n2) = strip_farm_vehicles(xml, "1", None);
         assert_eq!(n2, 2);
         assert!(!none.contains("farmId=\"1\""));
         assert!(none.contains("npc"));
-    }
-
-    #[test]
-    fn keep_base_prefers_a_truck_over_cheaper_tools() {
-        // A cheap leveler and a pricier pickup: keep the pickup, not the leveler.
-        let xml = "<vehicles>\n\
-            <vehicle farmId=\"1\" price=\"5000\" filename=\"data/leveler.xml\"/>\n\
-            <vehicle farmId=\"1\" price=\"26000\" filename=\"data/lizardPickup.xml\"/>\n\
-            </vehicles>";
-        let (out, n) = strip_farm_vehicles(xml, "1", true);
-        assert_eq!(n, 1);
-        assert!(out.contains("lizardPickup")); // truck kept
-        assert!(!out.contains("leveler")); // leveler removed despite being cheaper
+        // An unknown keep name keeps nothing (removes all).
+        let (_, n3) = strip_farm_vehicles(xml, "1", Some("nope"));
+        assert_eq!(n3, 2);
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -2803,6 +2822,7 @@ pub fn run() {
             patch_savegame,
             clone_savegame,
             strip_equipment,
+            list_vehicles,
             get_log,
             clear_log,
             app_paths,

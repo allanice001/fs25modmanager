@@ -7,6 +7,7 @@ import {
   SaveInfo,
   Scenario,
   SlotInfo,
+  VehicleInfo,
 } from "./api";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
@@ -46,9 +47,9 @@ const money = (n: number) =>
 // later. A warm-up scenario gives those Aug–Dec months away free.
 const WARMUP_YEARS = 5 / 12;
 
-/** What to do with the seeded save's equipment: keep it, keep only a base
- *  vehicle, or remove all owned vehicles for a bare start. */
-type EquipMode = "keep" | "base" | "none";
+/** What to do with the seeded save's equipment: keep it all, keep only one
+ *  chosen vehicle, or remove all owned vehicles for a bare start. */
+type EquipMode = "keep" | "one" | "none";
 
 const METRIC_OPTS: { v: Metric; label: string }[] = [
   { v: "cash", label: "Cash" },
@@ -234,6 +235,7 @@ export default function Scenarios({
     from: string,
     to: string,
     equip: EquipMode,
+    keepVehicle: string | null,
   ) {
     // A from-scratch scenario expects the source to be a fresh save (made via
     // FS25's "Start From Scratch"). Judge that by owned *equipment* value, not
@@ -260,10 +262,11 @@ export default function Scenarios({
       await api.cloneSavegame(from, to);
       await api.patchSavegame(to, scenario.name || null, scenario.startMoney);
       if (equip !== "keep") {
-        const n = await api.stripEquipment(to, equip === "base");
+        const keep = equip === "one" ? keepVehicle : null;
+        const n = await api.stripEquipment(to, keep);
         setSeedMsg(
           `Seeded ${to}: removed ${n} vehicle${n === 1 ? "" : "s"}` +
-            (equip === "base" ? " (kept a base vehicle)." : "."),
+            (keep ? ` (kept ${keep}).` : "."),
         );
       }
       await refreshSaves();
@@ -638,7 +641,9 @@ export default function Scenarios({
                   templateSlot={s.map ? templates[mapKeyOfFile(s.map)] : undefined}
                   busy={busy}
                   onRefreshSaves={refreshSaves}
-                  onSeed={(from, to, equip) => seedSave(s, from, to, equip)}
+                  onSeed={(from, to, equip, keep) =>
+                    seedSave(s, from, to, equip, keep)
+                  }
                 />
                 <button
                   className="btn ghost sm"
@@ -772,7 +777,12 @@ function SeedButton({
   templateSlot?: string;
   busy: boolean;
   onRefreshSaves: () => void;
-  onSeed: (from: string, to: string, equip: EquipMode) => void;
+  onSeed: (
+    from: string,
+    to: string,
+    equip: EquipMode,
+    keepVehicle: string | null,
+  ) => void;
 }) {
   const [open, setOpen] = useState(false);
   // Saves on the scenario's map (clone can't change a save's map). Match by the
@@ -786,6 +796,19 @@ function SeedButton({
   // From-scratch scenarios default to a bare garage; others keep equipment.
   const zeroStart = scenario.mode === "scratch" || !!scenario.warmupToJanuary;
   const [equip, setEquip] = useState<EquipMode>(zeroStart ? "none" : "keep");
+  // Vehicles in the chosen source save, for the "keep one vehicle" picker.
+  const [vehicles, setVehicles] = useState<VehicleInfo[]>([]);
+  const [keepVehicle, setKeepVehicle] = useState("");
+  useEffect(() => {
+    if (equip !== "one" || !from) return;
+    api
+      .listVehicles(from)
+      .then((v) => {
+        setVehicles(v);
+        setKeepVehicle((k) => (v.some((x) => x.name === k) ? k : v[0]?.name ?? ""));
+      })
+      .catch(() => setVehicles([]));
+  }, [equip, from]);
 
   // Whenever the popover opens or a refresh brings new saves, (re)pick a sensible
   // source: the designated template, else the first same-map save.
@@ -848,14 +871,28 @@ function SeedButton({
                 onChange={(e) => setEquip(e.target.value as EquipMode)}
               >
                 <option value="keep">🚜 Keep equipment</option>
-                <option value="base">🚜 Keep base vehicle only</option>
+                <option value="one">🚜 Keep one vehicle…</option>
                 <option value="none">🚜 Remove all equipment</option>
               </select>
+              {equip === "one" && (
+                <select
+                  value={keepVehicle}
+                  title="Which vehicle to keep — the rest are removed"
+                  onChange={(e) => setKeepVehicle(e.target.value)}
+                >
+                  {vehicles.length === 0 && <option value="">(none found)</option>}
+                  {vehicles.map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {v.name} · {money(v.price)}
+                    </option>
+                  ))}
+                </select>
+              )}
               <button
                 className="btn sm"
-                disabled={busy || !from || !to}
+                disabled={busy || !from || !to || (equip === "one" && !keepVehicle)}
                 onClick={() => {
-                  onSeed(from, to, equip);
+                  onSeed(from, to, equip, equip === "one" ? keepVehicle : null);
                   setOpen(false);
                 }}
               >

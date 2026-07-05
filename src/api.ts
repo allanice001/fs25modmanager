@@ -20,6 +20,13 @@ export interface LogEntry {
   message: string;
 }
 
+/** An owned vehicle in a save (for the seed "keep one vehicle" picker). */
+export interface VehicleInfo {
+  /** Basename without .xml — the id used to keep it. */
+  name: string;
+  price: number;
+}
+
 export interface AppPaths {
   configDir: string;
   libraryDir: string;
@@ -241,8 +248,10 @@ export const api = {
     invoke<void>("patch_savegame", { slot, name, money }),
   cloneSavegame: (fromSlot: string, toSlot: string) =>
     invoke<void>("clone_savegame", { fromSlot, toSlot }),
-  stripEquipment: (slot: string, keepBase: boolean) =>
-    invoke<number>("strip_equipment", { slot, keepBase }),
+  listVehicles: (slot: string) =>
+    invoke<VehicleInfo[]>("list_vehicles", { slot }),
+  stripEquipment: (slot: string, keep: string | null) =>
+    invoke<number>("strip_equipment", { slot, keep }),
   readCompanion: (slot: string) =>
     invoke<CompanionData | null>("read_companion", { slot }),
   scenarioHistory: (scenarioId: string, slot: string) =>
