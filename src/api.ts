@@ -264,6 +264,24 @@ export const api = {
   stripEquipment: (slot: string, keep: string | null) =>
     invoke<number>("strip_equipment", { slot, keep }),
   resetClock: (slot: string) => invoke<number>("reset_clock", { slot }),
+  writeScenarioOverlay: (
+    slot: string,
+    name: string,
+    goal: number | null,
+    start: number | null,
+    deadlineYears: number | null,
+    warmup: boolean,
+    rules: string[],
+  ) =>
+    invoke<void>("write_scenario_overlay", {
+      slot,
+      name,
+      goal,
+      start,
+      deadlineYears,
+      warmup,
+      rules,
+    }),
   readCompanion: (slot: string) =>
     invoke<CompanionData | null>("read_companion", { slot }),
   readCompanionEvents: (slot: string) =>

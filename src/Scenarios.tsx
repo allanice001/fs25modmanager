@@ -78,6 +78,15 @@ const WHEN_OPTS: { v: When; label: string }[] = [
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
+/** Human-readable rule lines for the in-game overlay (built-in + engine rules). */
+function scenarioRuleTexts(s: Scenario): string[] {
+  const builtin = s.rules
+    .map((r) => ruleById(r)?.label)
+    .filter((x): x is string => !!x);
+  const engine = (s.engineRules ?? []).map(describeRule);
+  return [...builtin, ...engine];
+}
+
 /** Reverse-engineer a scenario from an existing savegame: its map, mod list,
  *  current money (as the start), and a suggested goal/deadline. */
 function scenarioFromSave(save: SaveInfo, items: ModItem[]): Scenario {
@@ -287,6 +296,18 @@ export default function Scenarios({
         );
       }
       if (resetClock) await api.resetClock(to);
+      // Push the scenario goal/rules into the save for the in-game HUD.
+      await api
+        .writeScenarioOverlay(
+          to,
+          scenario.name || "Scenario",
+          scenario.goalMoney,
+          scenario.startMoney,
+          scenario.deadlineYears,
+          !!scenario.warmupToJanuary,
+          scenarioRuleTexts(scenario),
+        )
+        .catch(() => {});
       await refreshSaves();
     });
   }
@@ -713,6 +734,32 @@ export default function Scenarios({
                 >
                   🔗 Share
                 </button>
+                {s.savegameSlot && (
+                  <button
+                    className="btn ghost sm"
+                    disabled={busy}
+                    title="Push this scenario's goal, deadline & rules into the linked save so the in-game HUD shows them"
+                    onClick={() =>
+                      guard(() =>
+                        api
+                          .writeScenarioOverlay(
+                            s.savegameSlot!,
+                            s.name || "Scenario",
+                            s.goalMoney,
+                            s.startMoney,
+                            s.deadlineYears,
+                            !!s.warmupToJanuary,
+                            scenarioRuleTexts(s),
+                          )
+                          .then(() =>
+                            setSeedMsg(`Pushed goal to ${s.savegameSlot}.`),
+                          ),
+                      )
+                    }
+                  >
+                    📤 To game
+                  </button>
+                )}
                 <button
                   className="btn ghost sm"
                   disabled={busy}

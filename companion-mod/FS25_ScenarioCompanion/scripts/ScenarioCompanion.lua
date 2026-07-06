@@ -253,12 +253,42 @@ function ScenarioCompanion:checkPurchases(day, hour, farmId)
     self.lastOwned = cur
 end
 
+-- Read the scenario overlay the manager wrote (goal/deadline/rules) so the HUD
+-- can show the real challenge. Cached in self.scenario (nil if none).
+function ScenarioCompanion:readScenario()
+    local mission = g_currentMission
+    if mission == nil or mission.missionInfo == nil then return end
+    local dir = mission.missionInfo.savegameDirectory
+    if dir == nil then return end
+    local path = dir .. "/scenarioGoal.xml"
+    if not fileExists(path) then self.scenario = nil; return end
+    local xml = loadXMLFile("scenarioGoal", path)
+    if xml == nil or xml == 0 then self.scenario = nil; return end
+    local sc = {
+        name = getXMLString(xml, "scenario#name") or "Scenario",
+        goal = getXMLFloat(xml, "scenario#goal"),
+        deadlineYears = getXMLFloat(xml, "scenario#deadlineYears"),
+        warmup = getXMLBool(xml, "scenario#warmup"),
+        rules = {},
+    }
+    local i = 0
+    while hasXMLProperty(xml, string.format("scenario.rules.r(%d)", i)) do
+        local r = getXMLString(xml, string.format("scenario.rules.r(%d)", i))
+        if r ~= nil then table.insert(sc.rules, r) end
+        i = i + 1
+        if i > 20 then break end
+    end
+    delete(xml)
+    self.scenario = sc
+end
+
 -- ---- FS mod lifecycle (addModEventListener) --------------------------------
 
 function ScenarioCompanion:loadMap(name)
     self.lastHour = nil
     self.lastDay = nil
     self.hudVisible = true -- toggle with the J key (see keyEvent)
+    pcall(function() self:readScenario() end)
     pcall(function() self:write() end) -- initial snapshot
 end
 
@@ -275,6 +305,7 @@ function ScenarioCompanion:update(dt)
     if self.lastDay == nil or day ~= self.lastDay then
         self.lastDay = day
         pcall(function() self:appendHistory(day) end)
+        pcall(function() self:readScenario() end) -- pick up manager pushes
     end
 end
 
@@ -288,7 +319,8 @@ function ScenarioCompanion:keyEvent(unicode, sym, modifier, isDown)
     end
 end
 
--- Minimal in-game HUD: money · loan · day · owned vehicles, top-left.
+-- In-game HUD: scenario name + goal progress + deadline + rules, else raw
+-- telemetry. Rendered top-left (lowered so it clears the corner).
 function ScenarioCompanion:draw()
     if not self.hudVisible or renderText == nil then return end
     local mission = g_currentMission
@@ -297,19 +329,53 @@ function ScenarioCompanion:draw()
     local money, loan = farmMoneyLoan(farmId)
     local env = mission.environment or {}
     local day = env.currentDay or 0
+    local dpp = env.daysPerPeriod or 1
     local vcount = self.vcount or 0
+    local sc = self.scenario
 
-    local x, y, size = 0.013, 0.95, 0.016
+    local x, y, size = 0.013, 0.86, 0.015
+    local lh = size * 1.7
+    local white = function() if setTextColor ~= nil then setTextColor(1, 1, 1, 1) end end
+    if setTextAlignment ~= nil and RenderText ~= nil and RenderText.ALIGN_LEFT ~= nil then
+        setTextAlignment(RenderText.ALIGN_LEFT)
+    end
+
     if setTextBold ~= nil then setTextBold(true) end
     if setTextColor ~= nil then setTextColor(1, 0.85, 0.2, 1) end
-    renderText(x, y, size, "Scenario Companion")
+    renderText(x, y, size, sc ~= nil and sc.name or "Scenario Companion")
     if setTextBold ~= nil then setTextBold(false) end
-    if setTextColor ~= nil then setTextColor(1, 1, 1, 1) end
-    local line = string.format(
-        "$%s   loan $%s   day %d   vehicles %d",
-        tostring(math.floor(money)), tostring(math.floor(loan)), day, vcount
-    )
-    renderText(x, y - 0.022, size * 0.9, line)
+    white()
+    y = y - lh
+
+    if sc ~= nil and sc.goal ~= nil and sc.goal > 0 then
+        local pct = math.floor((money / sc.goal) * 100)
+        renderText(x, y, size, string.format("Goal $%s / $%s (%d%%)",
+            tostring(math.floor(money)), tostring(math.floor(sc.goal)), pct))
+    else
+        renderText(x, y, size, string.format("$%s   loan $%s",
+            tostring(math.floor(money)), tostring(math.floor(loan))))
+    end
+    y = y - lh
+
+    local periods = (day - 1) / dpp
+    local years = math.max(0, (periods - 5) / 12)
+    if sc ~= nil and sc.warmup then years = math.max(0, years - 5 / 12) end
+    if sc ~= nil and sc.deadlineYears ~= nil then
+        renderText(x, y, size, string.format("Year %.1f / %d   loan $%s   veh %d",
+            years, math.floor(sc.deadlineYears), tostring(math.floor(loan)), vcount))
+    else
+        renderText(x, y, size, string.format("day %d   vehicles %d", day, vcount))
+    end
+    y = y - lh
+
+    if sc ~= nil and sc.rules ~= nil and #sc.rules > 0 then
+        if setTextColor ~= nil then setTextColor(0.8, 0.8, 0.8, 1) end
+        for i = 1, math.min(4, #sc.rules) do
+            renderText(x, y, size * 0.85, "- " .. sc.rules[i])
+            y = y - (size * 0.85 * 1.7)
+        end
+        white()
+    end
 end
 
 addModEventListener(ScenarioCompanion)

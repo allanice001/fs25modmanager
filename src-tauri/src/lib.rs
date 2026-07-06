@@ -2555,6 +2555,47 @@ fn reset_clock(app: AppHandle, slot: String) -> Result<i64, String> {
     Ok(fresh)
 }
 
+/// Write the scenario's goal/deadline/rules into a save as `scenarioGoal.xml`,
+/// so the in-game companion HUD can show the real challenge (not just telemetry).
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn write_scenario_overlay(
+    app: AppHandle,
+    slot: String,
+    name: String,
+    goal: Option<f64>,
+    start: Option<f64>,
+    deadline_years: Option<f64>,
+    warmup: bool,
+    rules: Vec<String>,
+) -> Result<(), String> {
+    safe_filename(&slot)?;
+    let cfg = load_config(&app)?;
+    let dir = game_dir(&cfg).join(&slot);
+    if !dir.join("careerSavegame.xml").exists() {
+        return Err("no savegame in that slot".into());
+    }
+    let mut s = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<scenario");
+    s.push_str(&format!(" name=\"{}\"", xml_escape(&name)));
+    if let Some(g) = goal {
+        s.push_str(&format!(" goal=\"{g}\""));
+    }
+    if let Some(st) = start {
+        s.push_str(&format!(" start=\"{st}\""));
+    }
+    if let Some(d) = deadline_years {
+        s.push_str(&format!(" deadlineYears=\"{d}\""));
+    }
+    s.push_str(&format!(" warmup=\"{warmup}\">\n  <rules>\n"));
+    for r in &rules {
+        s.push_str(&format!("    <r>{}</r>\n", xml_escape(r)));
+    }
+    s.push_str("  </rules>\n</scenario>\n");
+    fs::write(dir.join("scenarioGoal.xml"), s).map_err(|e| e.to_string())?;
+    log_line(&app, "info", &format!("wrote scenario overlay to {slot}"));
+    Ok(())
+}
+
 fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
     for entry in walkdir::WalkDir::new(src).into_iter().flatten() {
         let path = entry.path();
@@ -2990,6 +3031,7 @@ pub fn run() {
             strip_equipment,
             list_vehicles,
             reset_clock,
+            write_scenario_overlay,
             get_log,
             clear_log,
             app_paths,
