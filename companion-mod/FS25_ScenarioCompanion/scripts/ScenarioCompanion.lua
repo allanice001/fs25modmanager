@@ -142,6 +142,7 @@ function ScenarioCompanion:write()
 
     -- Owned vehicles: count + names, so the manager can track what's been bought.
     local vnames, vcount = ownedVehicles(farmId)
+    self.vcount = vcount -- cached for the HUD so draw() needn't rescan each frame
     setXMLInt(xml, ROOT .. ".vehicleCount", vcount)
     for i, n in ipairs(vnames) do
         if i > 40 then break end
@@ -257,6 +258,7 @@ end
 function ScenarioCompanion:loadMap(name)
     self.lastHour = nil
     self.lastDay = nil
+    self.hudVisible = true -- toggle with the J key (see keyEvent)
     pcall(function() self:write() end) -- initial snapshot
 end
 
@@ -278,7 +280,36 @@ end
 
 function ScenarioCompanion:deleteMap() end
 function ScenarioCompanion:mouseEvent(posX, posY, isDown, isUp, button) end
-function ScenarioCompanion:keyEvent(unicode, sym, modifier, isDown) end
-function ScenarioCompanion:draw() end
+
+-- Toggle the HUD with J (best-effort; the input constant may vary by patch).
+function ScenarioCompanion:keyEvent(unicode, sym, modifier, isDown)
+    if isDown and Input ~= nil and Input.KEY_j ~= nil and sym == Input.KEY_j then
+        self.hudVisible = not self.hudVisible
+    end
+end
+
+-- Minimal in-game HUD: money · loan · day · owned vehicles, top-left.
+function ScenarioCompanion:draw()
+    if not self.hudVisible or renderText == nil then return end
+    local mission = g_currentMission
+    if mission == nil then return end
+    local farmId = resolveFarmId()
+    local money, loan = farmMoneyLoan(farmId)
+    local env = mission.environment or {}
+    local day = env.currentDay or 0
+    local vcount = self.vcount or 0
+
+    local x, y, size = 0.013, 0.95, 0.016
+    if setTextBold ~= nil then setTextBold(true) end
+    if setTextColor ~= nil then setTextColor(1, 0.85, 0.2, 1) end
+    renderText(x, y, size, "Scenario Companion")
+    if setTextBold ~= nil then setTextBold(false) end
+    if setTextColor ~= nil then setTextColor(1, 1, 1, 1) end
+    local line = string.format(
+        "$%s   loan $%s   day %d   vehicles %d",
+        tostring(math.floor(money)), tostring(math.floor(loan)), day, vcount
+    )
+    renderText(x, y - 0.022, size * 0.9, line)
+end
 
 addModEventListener(ScenarioCompanion)
