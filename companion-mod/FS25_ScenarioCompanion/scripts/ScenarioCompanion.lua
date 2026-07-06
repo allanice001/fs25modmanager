@@ -58,8 +58,25 @@ local function farmMoneyLoan(farmId)
     return money, loan
 end
 
--- The player's owned vehicles: returns (names[], count). Used to track what the
--- player has bought over time. Best-effort across FS25 API shapes.
+-- Is a vehicle actually OWNED (bought), not leased or a mission/contract rental?
+local function isOwned(v)
+    local owned = 1 -- PROPERTY_STATE_OWNED
+    if Vehicle ~= nil and Vehicle.PROPERTY_STATE_OWNED ~= nil then
+        owned = Vehicle.PROPERTY_STATE_OWNED
+    end
+    local ps = nil
+    if v.getPropertyState ~= nil then
+        local ok, s = pcall(function() return v:getPropertyState() end)
+        if ok then ps = s end
+    end
+    if ps == nil then ps = v.propertyState end
+    -- Unknown -> treat as owned (fallback); otherwise must equal OWNED.
+    return ps == nil or ps == owned
+end
+
+-- The player's owned vehicles: returns (names[], count). Only counts bought
+-- vehicles — excludes leased and mission/contract rentals. Best-effort across
+-- FS25 API shapes.
 local function ownedVehicles(farmId)
     local names, count = {}, 0
     local mission = g_currentMission
@@ -77,7 +94,7 @@ local function ownedVehicles(farmId)
                 if ok then owner = id end
             end
             if owner == nil then owner = v.ownerFarmId end
-            if owner == farmId then
+            if owner == farmId and isOwned(v) then
                 count = count + 1
                 if #names < 40 then
                     local name = nil
