@@ -253,6 +253,48 @@ fn read_companion(app: AppHandle, slot: String) -> Result<Option<CompanionData>,
     }))
 }
 
+/// A bought/sold vehicle event logged by the companion mod.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompanionEvent {
+    day: i64,
+    hour: i64,
+    kind: String,
+    name: String,
+}
+
+#[tauri::command]
+fn read_companion_events(app: AppHandle, slot: String) -> Result<Vec<CompanionEvent>, String> {
+    safe_filename(&slot)?;
+    let cfg = load_config(&app)?;
+    let path = game_dir(&cfg)
+        .join(&slot)
+        .join("scenarioCompanionEvents.xml");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let s = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let doc = roxmltree::Document::parse(strip_bom(&s)).map_err(|e| e.to_string())?;
+    let mut out: Vec<CompanionEvent> = doc
+        .root_element()
+        .descendants()
+        .filter(|n| n.has_tag_name("e"))
+        .filter_map(|n| {
+            Some(CompanionEvent {
+                day: n.attribute("day").and_then(|v| v.parse().ok())?,
+                hour: n
+                    .attribute("hour")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0),
+                kind: n.attribute("kind").unwrap_or("").to_string(),
+                name: n.attribute("name").unwrap_or("").to_string(),
+            })
+        })
+        .collect();
+    out.reverse(); // newest first
+    Ok(out)
+}
+
 /// One point in a scenario's history — one in-game day.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -2928,6 +2970,7 @@ pub fn run() {
             app_paths,
             open_folder,
             read_companion,
+            read_companion_events,
             scenario_history,
             get_templates,
             set_template,

@@ -27,6 +27,14 @@ export interface VehicleInfo {
   price: number;
 }
 
+/** A bought/sold event logged by the companion mod (newest first). */
+export interface CompanionEvent {
+  day: number;
+  hour: number;
+  kind: string;
+  name: string;
+}
+
 export interface AppPaths {
   configDir: string;
   libraryDir: string;
@@ -258,6 +266,8 @@ export const api = {
   resetClock: (slot: string) => invoke<number>("reset_clock", { slot }),
   readCompanion: (slot: string) =>
     invoke<CompanionData | null>("read_companion", { slot }),
+  readCompanionEvents: (slot: string) =>
+    invoke<CompanionEvent[]>("read_companion_events", { slot }),
   scenarioHistory: (scenarioId: string, slot: string) =>
     invoke<Sample[]>("scenario_history", { scenarioId, slot }),
   getLog: () => invoke<LogEntry[]>("get_log"),

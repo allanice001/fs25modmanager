@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   api,
   CompanionData,
+  CompanionEvent,
   ModHubEntry,
   ModItem,
   SaveInfo,
@@ -157,6 +158,7 @@ export default function Scenarios({
     {},
   );
   const [histories, setHistories] = useState<Record<string, Sample[]>>({});
+  const [events, setEvents] = useState<Record<string, CompanionEvent[]>>({});
   const [shareText, setShareText] = useState<string | null>(null);
   const [seedMsg, setSeedMsg] = useState<string | null>(null);
   const [editing, setEditing] = useState<Scenario | null>(null);
@@ -189,13 +191,17 @@ export default function Scenarios({
         ),
       ];
       const comps: Record<string, CompanionData> = {};
+      const evs: Record<string, CompanionEvent[]> = {};
       await Promise.all(
         linked.map(async (slot) => {
           const c = await api.readCompanion(slot).catch(() => null);
           if (c) comps[slot] = c;
+          const e = await api.readCompanionEvents(slot).catch(() => []);
+          if (e.length) evs[slot] = e;
         }),
       );
       setCompanions(comps);
+      setEvents(evs);
       // History for scenarios that have engine rules + a linked slot.
       const hist: Record<string, Sample[]> = {};
       await Promise.all(
@@ -548,6 +554,18 @@ export default function Scenarios({
                       </div>
                     );
                   })()}
+
+                {s.savegameSlot &&
+                  (events[s.savegameSlot]?.length ?? 0) > 0 && (
+                    <div className="purchase-log">
+                      {events[s.savegameSlot!].slice(0, 5).map((e, i) => (
+                        <div key={i} className={"pev " + e.kind}>
+                          {e.kind === "sold" ? "💸 sold" : "🛒 bought"} {e.name}
+                          <span className="muted"> · day {e.day}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
                 {s.rules.length > 0 && (
                   <div className="rules">

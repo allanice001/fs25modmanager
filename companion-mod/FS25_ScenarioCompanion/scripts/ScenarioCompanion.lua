@@ -21,6 +21,9 @@ local ROOT = "scenarioCompanion"
 local HISTORY_FILE = "scenarioCompanionHistory.xml"
 local HISTORY_ROOT = "scenarioCompanionHistory"
 local HISTORY_CAP = 4000 -- ~11 in-game years of daily samples
+local EVENTS_FILE = "scenarioCompanionEvents.xml"
+local EVENTS_ROOT = "scenarioCompanionEvents"
+local EVENTS_CAP = 500
 local VERSION = 1
 
 -- Best-effort resolution of the local player's farm id.
@@ -96,14 +99,12 @@ local function ownedVehicles(farmId)
             if owner == nil then owner = v.ownerFarmId end
             if owner == farmId and isOwned(v) then
                 count = count + 1
-                if #names < 40 then
-                    local name = nil
-                    if v.getFullName ~= nil then
-                        local ok, n = pcall(function() return v:getFullName() end)
-                        if ok then name = n end
-                    end
-                    table.insert(names, name or "vehicle")
+                local name = nil
+                if v.getFullName ~= nil then
+                    local ok, n = pcall(function() return v:getFullName() end)
+                    if ok then name = n end
                 end
+                table.insert(names, name or "vehicle")
             end
         end
     end
@@ -143,6 +144,7 @@ function ScenarioCompanion:write()
     local vnames, vcount = ownedVehicles(farmId)
     setXMLInt(xml, ROOT .. ".vehicleCount", vcount)
     for i, n in ipairs(vnames) do
+        if i > 40 then break end
         setXMLString(xml, string.format("%s.vehicles.v(%d)#name", ROOT, i - 1), n)
     end
 
@@ -196,6 +198,60 @@ function ScenarioCompanion:appendHistory(day)
     delete(xml)
 end
 
+-- Append a bought/sold event (day, hour, kind, name) to the events file.
+function ScenarioCompanion:logEvent(day, hour, kind, name)
+    local mission = g_currentMission
+    if mission == nil or mission.missionInfo == nil then return end
+    local dir = mission.missionInfo.savegameDirectory
+    if dir == nil then return end
+    local path = dir .. "/" .. EVENTS_FILE
+
+    local xml, count = nil, 0
+    if fileExists(path) then
+        xml = loadXMLFile(EVENTS_ROOT, path)
+        if xml ~= nil and xml ~= 0 then
+            while hasXMLProperty(xml, string.format("%s.e(%d)", EVENTS_ROOT, count)) do
+                count = count + 1
+            end
+        end
+    end
+    if xml == nil or xml == 0 then
+        xml = createXMLFile(EVENTS_ROOT, path, EVENTS_ROOT)
+        count = 0
+    end
+    if xml == nil or xml == 0 or count >= EVENTS_CAP then
+        if xml ~= nil and xml ~= 0 then delete(xml) end
+        return
+    end
+    local key = string.format("%s.e(%d)", EVENTS_ROOT, count)
+    setXMLInt(xml, key .. "#day", day)
+    setXMLInt(xml, key .. "#hour", hour)
+    setXMLString(xml, key .. "#kind", kind)
+    setXMLString(xml, key .. "#name", name)
+    saveXMLFile(xml)
+    delete(xml)
+end
+
+-- Diff the owned-vehicle multiset against the last check and log bought/sold
+-- events. The first check just seeds the baseline (no events for what you load
+-- in with).
+function ScenarioCompanion:checkPurchases(day, hour, farmId)
+    local names = ownedVehicles(farmId)
+    local cur = {}
+    for _, n in ipairs(names) do cur[n] = (cur[n] or 0) + 1 end
+    if self.lastOwned ~= nil then
+        for n, c in pairs(cur) do
+            local prev = self.lastOwned[n] or 0
+            for _ = 1, c - prev do self:logEvent(day, hour, "bought", n) end
+        end
+        for n, c in pairs(self.lastOwned) do
+            local now = cur[n] or 0
+            for _ = 1, c - now do self:logEvent(day, hour, "sold", n) end
+        end
+    end
+    self.lastOwned = cur
+end
+
 -- ---- FS mod lifecycle (addModEventListener) --------------------------------
 
 function ScenarioCompanion:loadMap(name)
@@ -211,6 +267,7 @@ function ScenarioCompanion:update(dt)
     if self.lastHour == nil or h ~= self.lastHour then
         self.lastHour = h
         pcall(function() self:write() end)
+        pcall(function() self:checkPurchases(env.currentDay or 0, h, resolveFarmId()) end)
     end
     local day = env.currentDay or 0
     if self.lastDay == nil or day ~= self.lastDay then

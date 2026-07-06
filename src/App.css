@@ -1212,3 +1212,18 @@ main {
   font-size: 12px;
   color: var(--muted);
 }
+
+/* ---- Purchase events log ---- */
+.purchase-log {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 12px;
+}
+.pev.bought {
+  color: var(--accent);
+}
+.pev.sold {
+  color: var(--warn);
+}
