@@ -1562,9 +1562,31 @@ fn place_companion(cfg: &Config) -> Result<(), String> {
     Ok(())
 }
 
-/// Configure the game to match a scenario: enable its map + required mods, set
-/// the active map, and (if `exclusive`) disable everything else in the mods
-/// folder for a clean slate. The telemetry companion mod is always kept active.
+/// Expand a set of library filenames to include their dependencies (from each
+/// modDesc's `<dependencies>`), transitively. Only deps present in the library
+/// are added — missing ones are surfaced elsewhere.
+fn expand_dependencies(cfg: &Config, files: Vec<String>) -> Vec<String> {
+    let lib = PathBuf::from(&cfg.library_dir);
+    let mut result = files;
+    let mut i = 0;
+    while i < result.len() {
+        let path = lib.join(&result[i]);
+        if let Ok(desc) = moddesc::parse(&path) {
+            for dep in desc.dependencies {
+                let dep_file = format!("{dep}.zip");
+                if !result.contains(&dep_file) && lib.join(&dep_file).exists() {
+                    result.push(dep_file);
+                }
+            }
+        }
+        i += 1;
+    }
+    result
+}
+
+/// Configure the game to match a scenario: enable its map + required mods (and
+/// their dependencies), set the active map, and (if `exclusive`) disable
+/// everything else in the mods folder. The telemetry companion is kept active.
 #[tauri::command]
 fn apply_scenario(app: AppHandle, id: String, exclusive: bool) -> Result<(), String> {
     let list = load_scenarios(&app)?;
@@ -1583,6 +1605,9 @@ fn apply_scenario(app: AppHandle, id: String, exclusive: bool) -> Result<(), Str
     for f in &keep {
         safe_filename(f)?;
     }
+    // Pull in dependencies (a map needs its building/prefab mods, etc.) so the
+    // scenario loads complete — transitively, library files only.
+    let keep = expand_dependencies(&cfg, keep);
 
     if exclusive {
         // Force-clean: remove every mods-folder entry not in the scenario,

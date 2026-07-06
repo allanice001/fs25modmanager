@@ -448,6 +448,21 @@ export default function Scenarios({
                 </div>
                 {s.description && <div className="sub">{s.description}</div>}
 
+                {(() => {
+                  const mapItem = s.map
+                    ? items.find((i) => i.filename === s.map)
+                    : null;
+                  const missing = (mapItem?.dependencies ?? []).filter(
+                    (d) => !items.some((i) => i.filename === `${d}.zip`),
+                  );
+                  return missing.length > 0 ? (
+                    <div className="warn">
+                      ⚠ Map “{mapItem!.title}” needs mods not in your library:{" "}
+                      {missing.join(", ")} — grab them in Discover.
+                    </div>
+                  ) : null;
+                })()}
+
                 <div className="scen-meta">
                   {s.startMoney != null && (
                     <span>Start: {money(s.startMoney)}</span>
