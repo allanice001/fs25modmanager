@@ -1227,3 +1227,13 @@ main {
 .pev.sold {
   color: var(--warn);
 }
+
+.badge.hud.live {
+  background: var(--accent-dk);
+  color: #fff;
+}
+.badge.hud.fallback {
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}

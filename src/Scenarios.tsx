@@ -168,6 +168,7 @@ export default function Scenarios({
   );
   const [histories, setHistories] = useState<Record<string, Sample[]>>({});
   const [events, setEvents] = useState<Record<string, CompanionEvent[]>>({});
+  const [overlays, setOverlays] = useState<Record<string, boolean>>({});
   const [shareText, setShareText] = useState<string | null>(null);
   const [seedMsg, setSeedMsg] = useState<string | null>(null);
   const [editing, setEditing] = useState<Scenario | null>(null);
@@ -201,16 +202,19 @@ export default function Scenarios({
       ];
       const comps: Record<string, CompanionData> = {};
       const evs: Record<string, CompanionEvent[]> = {};
+      const ovl: Record<string, boolean> = {};
       await Promise.all(
         linked.map(async (slot) => {
           const c = await api.readCompanion(slot).catch(() => null);
           if (c) comps[slot] = c;
           const e = await api.readCompanionEvents(slot).catch(() => []);
           if (e.length) evs[slot] = e;
+          ovl[slot] = await api.hasScenarioOverlay(slot).catch(() => false);
         }),
       );
       setCompanions(comps);
       setEvents(evs);
+      setOverlays(ovl);
       // History for scenarios that have engine rules + a linked slot.
       const hist: Record<string, Sample[]> = {};
       await Promise.all(
@@ -464,6 +468,21 @@ export default function Scenarios({
               <div className="card-info">
                 <div className="title-row">
                   <span className="title">{s.name || "Untitled scenario"}</span>
+                  {s.savegameSlot && (
+                    <span
+                      className={
+                        "badge hud " +
+                        (overlays[s.savegameSlot] ? "live" : "fallback")
+                      }
+                      title={
+                        overlays[s.savegameSlot]
+                          ? "Scenario pushed — the in-game HUD shows the goal, deadline & rules."
+                          : "Not pushed — the in-game HUD only shows raw telemetry. Click “To game”."
+                      }
+                    >
+                      {overlays[s.savegameSlot] ? "🖥 live" : "🖥 fallback"}
+                    </span>
+                  )}
                   {s.mode && <span className="badge mode">{s.mode}</span>}
                   {s.map && <span className="badge map">{titleOf(s.map)}</span>}
                 </div>

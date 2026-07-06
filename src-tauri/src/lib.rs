@@ -2596,6 +2596,15 @@ fn write_scenario_overlay(
     Ok(())
 }
 
+/// Whether a save has the scenario overlay pushed (so the in-game HUD shows the
+/// scenario, not just raw telemetry).
+#[tauri::command]
+fn has_scenario_overlay(app: AppHandle, slot: String) -> Result<bool, String> {
+    safe_filename(&slot)?;
+    let cfg = load_config(&app)?;
+    Ok(game_dir(&cfg).join(&slot).join("scenarioGoal.xml").exists())
+}
+
 fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
     for entry in walkdir::WalkDir::new(src).into_iter().flatten() {
         let path = entry.path();
@@ -3032,6 +3041,7 @@ pub fn run() {
             list_vehicles,
             reset_clock,
             write_scenario_overlay,
+            has_scenario_overlay,
             get_log,
             clear_log,
             app_paths,

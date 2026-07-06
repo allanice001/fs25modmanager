@@ -284,6 +284,8 @@ export const api = {
     }),
   readCompanion: (slot: string) =>
     invoke<CompanionData | null>("read_companion", { slot }),
+  hasScenarioOverlay: (slot: string) =>
+    invoke<boolean>("has_scenario_overlay", { slot }),
   readCompanionEvents: (slot: string) =>
     invoke<CompanionEvent[]>("read_companion_events", { slot }),
   scenarioHistory: (scenarioId: string, slot: string) =>
