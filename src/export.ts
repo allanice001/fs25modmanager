@@ -1,5 +1,6 @@
 import { ModHubEntry, ModItem, Scenario } from "./api";
 import { ruleById } from "./presets";
+import { isBaseMap, baseMapTitle } from "./mapId";
 
 /** Public download link for the app (the auto-update mirror repo's latest). */
 export const APP_URL =
@@ -25,10 +26,14 @@ export function buildScenarioShare(
   if (scenario.description) out.push(scenario.description);
   out.push("");
 
-  const mapItem = scenario.map ? itemByFile.get(scenario.map) : null;
-  if (mapItem) {
-    const l = linkFor(mapItem.title);
-    out.push(`🗺 Map: ${mapItem.title}${l ? ` — ${l}` : ""}`);
+  if (scenario.map && isBaseMap(scenario.map)) {
+    out.push(`🗺 Map: ${baseMapTitle(scenario.map)} (base game)`);
+  } else {
+    const mapItem = scenario.map ? itemByFile.get(scenario.map) : null;
+    if (mapItem) {
+      const l = linkFor(mapItem.title);
+      out.push(`🗺 Map: ${mapItem.title}${l ? ` — ${l}` : ""}`);
+    }
   }
 
   const goal: string[] = [];

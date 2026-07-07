@@ -20,7 +20,16 @@ import {
 } from "./presets";
 import { RecMod, ownedMatch, recsFor } from "./recommendations";
 import { modhubSearch, modhubMapsLive } from "./ModHub";
-import { saveMapStem, fileStem, mapKeyOfFile, saveOnMap } from "./mapId";
+import {
+  saveMapStem,
+  fileStem,
+  mapKeyOfFile,
+  saveOnMap,
+  BASE_MAPS,
+  isBaseMap,
+  baseMapTitle,
+  baseMapValue,
+} from "./mapId";
 import { buildScenarioShare } from "./export";
 import {
   Rule,
@@ -100,6 +109,8 @@ function scenarioFromSave(save: SaveInfo, items: ModItem[]): Scenario {
     maps.find(
       (m) => save.mapTitle && norm(m.filename).includes(norm(save.mapTitle)),
     );
+  // Fall back to a base-game map matched by title.
+  const baseMatch = BASE_MAPS.find((t) => norm(t) === norm(save.mapTitle));
 
   // save.mods are modNames = the library filename without ".zip".
   const wanted = new Set(save.mods.map((m) => m.toLowerCase()));
@@ -118,7 +129,7 @@ function scenarioFromSave(save: SaveInfo, items: ModItem[]): Scenario {
     description: `Built from ${save.slot}: grow from ${money(cur)} to the goal.`,
     mode: "from-save",
     rules: (save.loan ?? 0) > 0 ? ["must-have-debt"] : [],
-    map: mapItem?.filename ?? null,
+    map: mapItem?.filename ?? (baseMatch ? baseMapValue(baseMatch) : null),
     requiredMods: withMoneyMod(requiredMods, items),
     startingKit: "",
     startMoney: cur,
@@ -179,6 +190,9 @@ export default function Scenarios({
   const mods = useMemo(() => items.filter((i) => i.kind === "mod"), [items]);
   const titleOf = (filename: string) =>
     items.find((i) => i.filename === filename)?.title ?? filename;
+  // Display label for a scenario's map (a base-game map, else a library map).
+  const mapLabel = (map: string | null) =>
+    map ? (isBaseMap(map) ? baseMapTitle(map) : titleOf(map)) : "";
 
   async function reload() {
     try {
@@ -484,7 +498,7 @@ export default function Scenarios({
                     </span>
                   )}
                   {s.mode && <span className="badge mode">{s.mode}</span>}
-                  {s.map && <span className="badge map">{titleOf(s.map)}</span>}
+                  {s.map && <span className="badge map">{mapLabel(s.map)}</span>}
                 </div>
                 {s.description && <div className="sub">{s.description}</div>}
 
@@ -735,7 +749,7 @@ export default function Scenarios({
                 <SeedButton
                   scenario={s}
                   mapFile={s.map}
-                  mapTitle={s.map ? titleOf(s.map) : ""}
+                  mapTitle={mapLabel(s.map)}
                   saves={saves}
                   slots={slots}
                   templateSlot={s.map ? templates[mapKeyOfFile(s.map)] : undefined}
@@ -1341,11 +1355,22 @@ function Editor({
           onChange={(e) => set({ map: e.target.value || null })}
         >
           <option value="">— none —</option>
-          {maps.map((m) => (
-            <option key={m.filename} value={m.filename}>
-              {m.title}
-            </option>
-          ))}
+          <optgroup label="Base-game maps">
+            {BASE_MAPS.map((t) => (
+              <option key={t} value={baseMapValue(t)}>
+                {t}
+              </option>
+            ))}
+          </optgroup>
+          {maps.length > 0 && (
+            <optgroup label="Your library">
+              {maps.map((m) => (
+                <option key={m.filename} value={m.filename}>
+                  {m.title}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
       </label>
 

@@ -1598,9 +1598,17 @@ fn apply_scenario(app: AppHandle, id: String, exclusive: bool) -> Result<(), Str
     let mut cfg = load_config(&app)?;
 
     // Everything the scenario wants active.
+    // A "base:<title>" map is a base-game map (no library zip to enable).
+    let is_base_map = scenario
+        .map
+        .as_deref()
+        .map(|m| m.starts_with("base:"))
+        .unwrap_or(false);
     let mut keep: Vec<String> = scenario.required_mods.clone();
     if let Some(m) = &scenario.map {
-        keep.push(m.clone());
+        if !is_base_map {
+            keep.push(m.clone());
+        }
     }
     for f in &keep {
         safe_filename(f)?;
@@ -1629,7 +1637,12 @@ fn apply_scenario(app: AppHandle, id: String, exclusive: bool) -> Result<(), Str
     // The telemetry companion is always active during a scenario.
     place_companion(&cfg)?;
 
-    cfg.active_map = scenario.map.clone();
+    // A base-game map has no library item for compat checks — clear active map.
+    cfg.active_map = if is_base_map {
+        None
+    } else {
+        scenario.map.clone()
+    };
     write_config(&app, &cfg)?;
     log_line(
         &app,
