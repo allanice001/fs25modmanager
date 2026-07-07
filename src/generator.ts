@@ -1,6 +1,7 @@
 import { ModItem, Scenario } from "./api";
 import { moneyControlMod, withMoneyMod } from "./presets";
 import { recommendedOwned } from "./recommendations";
+import { isBaseMap, baseMapTitle } from "./mapId";
 
 export type Difficulty =
   | "easy"
@@ -153,7 +154,10 @@ export function generateScenario(opts: GenOptions, items: ModItem[]): Scenario {
 
   const mapFile = opts.map ?? pick(maps)?.filename ?? null;
   const mapTitle =
-    (mapFile && items.find((i) => i.filename === mapFile)?.title) || "the map";
+    (mapFile && isBaseMap(mapFile)
+      ? baseMapTitle(mapFile)
+      : mapFile && items.find((i) => i.filename === mapFile)?.title) ||
+    "the map";
 
   // Prefer curated mods for the theme, then keyword matches, then random flavor.
   const curated = recommendedOwned(theme.id, items);

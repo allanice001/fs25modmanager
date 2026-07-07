@@ -1800,11 +1800,22 @@ function GeneratorPanel({
           onChange={(e) => set({ map: e.target.value || null })}
         >
           <option value="">🎲 Random from library</option>
-          {maps.map((m) => (
-            <option key={m.filename} value={m.filename}>
-              {m.title}
-            </option>
-          ))}
+          <optgroup label="Base-game maps">
+            {BASE_MAPS.map((t) => (
+              <option key={t} value={baseMapValue(t)}>
+                {t}
+              </option>
+            ))}
+          </optgroup>
+          {maps.length > 0 && (
+            <optgroup label="Your library">
+              {maps.map((m) => (
+                <option key={m.filename} value={m.filename}>
+                  {m.title}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
         {maps.length === 0 && (
           <span className="hint">
