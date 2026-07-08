@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "fs25modmanager",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "identifier": "com.dragon.fs25modmanager",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -39,7 +39,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/allanice001/fs25modmanager-releases/releases/latest/download/latest.json"
+        "https://github.com/allanice001/fs25modmanager/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE3QkMxODlFNEU1NjdFMTUKUldRVmZsWk9uaGk4cDRsaHFsdmp5bzdac29qWFRtbGYrblFKbzFxRG1CUXpnS2tLaTZyQkJNQWkK"
     }

@@ -2890,6 +2890,70 @@ fn disk_report(app: AppHandle) -> Result<DiskReport, String> {
     })
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .invoke_handler(tauri::generate_handler![
+            get_config,
+            save_config,
+            launch_game,
+            list_items,
+            set_enabled,
+            set_enabled_many,
+            set_active_map,
+            update_meta,
+            import_from_mods,
+            modhub_upsert,
+            modhub_all,
+            download_mod,
+            fetch_image,
+            list_savegames,
+            list_scenarios,
+            save_scenario,
+            delete_scenario,
+            apply_scenario,
+            health_check,
+            fix_links,
+            list_profiles,
+            save_profile,
+            delete_profile,
+            apply_profile,
+            list_backups,
+            backup_savegame,
+            restore_savegame,
+            sync_status,
+            sync_setup,
+            sync_push,
+            sync_pull,
+            list_slots,
+            patch_savegame,
+            clone_savegame,
+            strip_equipment,
+            list_vehicles,
+            reset_clock,
+            write_scenario_overlay,
+            has_scenario_overlay,
+            get_log,
+            clear_log,
+            app_paths,
+            open_folder,
+            read_companion,
+            read_companion_events,
+            scenario_history,
+            get_templates,
+            set_template,
+            farm_overview,
+            disk_report,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3005,68 +3069,4 @@ mod tests {
         assert!(safe_filename("a/b.zip").is_err());
         assert!(safe_filename("").is_err());
     }
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![
-            get_config,
-            save_config,
-            launch_game,
-            list_items,
-            set_enabled,
-            set_enabled_many,
-            set_active_map,
-            update_meta,
-            import_from_mods,
-            modhub_upsert,
-            modhub_all,
-            download_mod,
-            fetch_image,
-            list_savegames,
-            list_scenarios,
-            save_scenario,
-            delete_scenario,
-            apply_scenario,
-            health_check,
-            fix_links,
-            list_profiles,
-            save_profile,
-            delete_profile,
-            apply_profile,
-            list_backups,
-            backup_savegame,
-            restore_savegame,
-            sync_status,
-            sync_setup,
-            sync_push,
-            sync_pull,
-            list_slots,
-            patch_savegame,
-            clone_savegame,
-            strip_equipment,
-            list_vehicles,
-            reset_clock,
-            write_scenario_overlay,
-            has_scenario_overlay,
-            get_log,
-            clear_log,
-            app_paths,
-            open_folder,
-            read_companion,
-            read_companion_events,
-            scenario_history,
-            get_templates,
-            set_template,
-            farm_overview,
-            disk_report,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
 }

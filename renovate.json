@@ -28,7 +28,7 @@
       "dependencyDashboardApproval": true
     },
     {
-      "description": "Pin tauri-action to v0: v1 emits api.github.com asset URLs in latest.json that break our public-mirror rewrite (verified on a throwaway tag). Revisit only with a mirror-job rewrite.",
+      "description": "Pin tauri-action to v0: v1 emits api.github.com asset URLs in latest.json, which the unauthenticated updater can't fetch cleanly (verified on a throwaway tag). v0 emits plain github.com/.../releases/download/ URLs. Revisit only if v1's URL format is confirmed updater-compatible.",
       "matchManagers": ["github-actions"],
       "matchPackageNames": ["tauri-apps/tauri-action"],
       "matchUpdateTypes": ["major"],

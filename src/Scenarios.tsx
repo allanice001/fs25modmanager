@@ -771,7 +771,7 @@ export default function Scenarios({
                   <button
                     className="btn ghost sm"
                     disabled={busy}
-                    title="Push this scenario's goal, deadline & rules into the linked save so the in-game HUD shows them"
+                    title="Push this scenario's goal, deadline & rules into the linked save so the in-game HUD shows them. (Steam Cloud users: pick Local Save in the conflict prompt on next launch.)"
                     onClick={() =>
                       guard(() =>
                         api
@@ -894,6 +894,25 @@ function ApplyButton({
         />
         clean slate
       </label>
+    </div>
+  );
+}
+
+/** Steam Cloud syncs FS25 savegames, so editing a save outside the game (seed /
+ *  reset clock / overlay push) makes Steam show a "Cloud Conflict" prompt on the
+ *  next launch. Warn the user to keep the Local side — or disable the sync. */
+function SteamCloudNote() {
+  return (
+    <div
+      className="warn"
+      title={
+        "Steam Cloud conflict prompt after editing a save is expected. To stop it " +
+        "for good: Steam → right-click Farming Simulator 25 → Properties → General " +
+        "→ uncheck “Keep game saves in the Steam Cloud.”"
+      }
+    >
+      ⚠️ Steam Cloud on for FS25? On next launch pick <b>Local Save</b> to keep this
+      change — or disable Steam Cloud for FS25 (hover for how).
     </div>
   );
 }
@@ -1087,6 +1106,7 @@ function SeedButton({
                     ? ` with ${money(scenario.startMoney)}`
                     : ""}
               </button>
+              <SteamCloudNote />
             </>
           )}
         </div>

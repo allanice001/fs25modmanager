@@ -2,9 +2,9 @@ import { ModHubEntry, ModItem, Scenario } from "./api";
 import { ruleById } from "./presets";
 import { isBaseMap, baseMapTitle } from "./mapId";
 
-/** Public download link for the app (the auto-update mirror repo's latest). */
+/** Public download link for the app (the repo's latest release). */
 export const APP_URL =
-  "https://github.com/allanice001/fs25modmanager-releases/releases/latest";
+  "https://github.com/allanice001/fs25modmanager/releases/latest";
 
 const money = (n: number) => "$" + Math.round(n).toLocaleString();
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");

@@ -69,63 +69,9 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "FS25 Mod Manager ${{ github.ref_name }}"
-          releaseDraft: true
+          # The repo is public, so the Tauri updater (which fetches
+          # unauthenticated) reads these release assets directly — publish the
+          # release straight away instead of via a draft + mirror.
+          releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
-
-  # The code repo is private, so the Tauri updater (which fetches unauthenticated)
-  # can't read its release assets. Mirror the built installers + a URL-rewritten
-  # latest.json to a PUBLIC releases repo that the updater endpoint points at.
-  mirror:
-    needs: build
-    runs-on: ubuntu-latest
-    # Draft releases are only visible to a token with push access, so the
-    # GITHUB_TOKEN used below must have contents:write to find the draft.
-    permissions:
-      contents: write
-    steps:
-      - name: Download assets from the private draft release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p out
-          TAG="${{ github.ref_name }}"
-          REPO="${{ github.repository }}"
-          # `gh release download` can't resolve drafts by tag, so find the
-          # release (incl. drafts) via the API and pull each asset by id.
-          REL=$(gh api "repos/$REPO/releases" --paginate \
-            --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -1)
-          echo "release id: $REL"
-          if [ -z "$REL" ]; then
-            echo "::error::no release found for tag $TAG (is the draft visible to this token?)"
-            exit 1
-          fi
-          gh api "repos/$REPO/releases/$REL/assets" --paginate \
-            --jq '.[] | "\(.id)\t\(.name)"' | while IFS=$'\t' read -r id name; do
-            echo "downloading $name"
-            gh api "repos/$REPO/releases/assets/$id" \
-              -H "Accept: application/octet-stream" > "out/$name"
-          done
-          ls -la out
-
-      - name: Point latest.json at the public releases repo
-        run: |
-          sed -i \
-            's#/${{ github.repository }}/releases/download/#/allanice001/fs25modmanager-releases/releases/download/#g' \
-            out/latest.json
-          echo "--- rewritten latest.json ---"; cat out/latest.json
-
-      - name: Publish to the public releases repo
-        env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-        run: |
-          TAG="${{ github.ref_name }}"
-          if gh release view "$TAG" --repo allanice001/fs25modmanager-releases >/dev/null 2>&1; then
-            gh release upload "$TAG" out/* --repo allanice001/fs25modmanager-releases --clobber
-          else
-            gh release create "$TAG" out/* \
-              --repo allanice001/fs25modmanager-releases \
-              --title "FS25 Mod Manager $TAG" \
-              --notes "Auto-update artifacts for FS25 Mod Manager. Source code: https://github.com/allanice001/fs25modmanager" \
-              --latest
-          fi

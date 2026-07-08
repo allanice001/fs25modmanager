@@ -7,6 +7,27 @@ import { parseModhub } from "./scraper";
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
 
+// ModHub is occasionally slow or unreachable; without a cap a stalled request
+// hangs the caller forever (e.g. the generator stuck on "Rolling…"). Abort after
+// this long so the promise always settles and the UI can recover.
+const HUB_TIMEOUT_MS = 15_000;
+
+/** GET a ModHub URL with the shared UA and a hard timeout. */
+async function hubFetch(url: string): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), HUB_TIMEOUT_MS);
+  try {
+    return await httpFetch(url, {
+      method: "GET",
+      headers: { "User-Agent": UA },
+      signal: ctrl.signal,
+      connectTimeout: HUB_TIMEOUT_MS,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Curated ModHub category filters (key = the site's `filter` param). */
 export const CATEGORIES: { key: string; label: string }[] = [
   { key: "latest", label: "Newest" },
@@ -34,10 +55,7 @@ function modhubUrl(category: string, search: string, page: number): string {
 
 /** Search ModHub for a term and return the parsed first-page results. */
 export async function modhubSearch(term: string): Promise<ModHubEntry[]> {
-  const res = await httpFetch(modhubUrl("", term, 0), {
-    method: "GET",
-    headers: { "User-Agent": UA },
-  });
+  const res = await hubFetch(modhubUrl("", term, 0));
   if (!res.ok) return [];
   return parseModhub(await res.text(), "");
 }
@@ -53,10 +71,7 @@ const MAP_CATEGORIES = [
  *  "fully random" generator when the local cache has no maps cached yet. */
 export async function modhubMapsLive(): Promise<ModHubEntry[]> {
   const cat = MAP_CATEGORIES[Math.floor(Math.random() * MAP_CATEGORIES.length)];
-  const res = await httpFetch(modhubUrl(cat, "", 0), {
-    method: "GET",
-    headers: { "User-Agent": UA },
-  });
+  const res = await hubFetch(modhubUrl(cat, "", 0));
   if (!res.ok) return [];
   return parseModhub(await res.text(), cat);
 }
@@ -155,10 +170,7 @@ export default function ModHub({
     const collected: ModHubEntry[] = [];
     const pages = search.trim() ? 1 : 3;
     for (let page = 0; page < pages; page++) {
-      const res = await httpFetch(modhubUrl(cat, search, page), {
-        method: "GET",
-        headers: { "User-Agent": UA },
-      });
+      const res = await hubFetch(modhubUrl(cat, search, page));
       if (!res.ok) throw new Error(`ModHub returned HTTP ${res.status}`);
       const parsed = parseModhub(await res.text(), search.trim() ? "" : cat);
       if (parsed.length === 0) break;
