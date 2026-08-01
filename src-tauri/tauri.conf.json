@@ -25,6 +25,10 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "publisher": "Johan Allan Swanepoel",
+    "copyright": "Copyright © 2026 Johan Allan Swanepoel. Licensed under Apache-2.0.",
+    "shortDescription": "Mod and map manager for Farming Simulator 25",
+    "longDescription": "Manage your Farming Simulator 25 mod library: keep every downloaded mod and map zip in one folder, flip them in and out of the game's mods folder, and get warned when a mod won't work on the map you're playing.",
     "macOS": {
       "signingIdentity": "FE8F79AB9AF74D0EAF974421EE6E8CCC51DDBF08"
     },

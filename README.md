@@ -76,6 +76,15 @@ these repo secrets are set: `APPLE_CERTIFICATE` (base64 of your exported
 Developer ID `.p12`), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`,
 `APPLE_ID`, `APPLE_PASSWORD` (app-specific), `APPLE_TEAM_ID`.
 
+### Signing (Windows)
+
+Windows builds are **not yet code-signed**. On a clean Windows 11 install,
+[Smart App Control](https://support.microsoft.com/en-us/topic/what-is-smart-app-control-285ea03d-fa88-4495-bf75-c251c8e4d8b4)
+may block the installed `fs25modmanager.exe` outright — and unlike the ordinary
+SmartScreen prompt, it offers no "run anyway". Free code signing for open
+source via the SignPath Foundation is in progress; see [CODE_SIGNING.md](CODE_SIGNING.md)
+for the policy that will apply once it lands.
+
 Cross-platform note: the codebase is OS-aware, but a Windows binary must be
 built **on Windows** (or in Windows CI) — you can't produce it from macOS.
 
