@@ -1,6 +1,6 @@
 [package]
 name = "fs25modmanager"
-version = "0.1.15"
+version = "0.1.16"
 description = "Mod and map manager for Farming Simulator 25"
 authors = ["Johan Allan Swanepoel"]
 edition = "2021"
