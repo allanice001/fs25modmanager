@@ -3,6 +3,11 @@
 This document is the published code signing policy for **FS25 Mod Manager**, as
 required by the SignPath Foundation free code signing programme.
 
+It is also published on the project homepage, which is the canonical copy
+SignPath is pointed at:
+<https://allanice001.github.io/fs25modmanager/#code-signing>
+(source: [`docs/index.html`](docs/index.html)). Keep the two in step.
+
 ## Certificate and signing
 
 Free code signing for the Windows binaries of this project is provided by

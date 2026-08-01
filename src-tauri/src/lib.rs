@@ -2017,6 +2017,14 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     run_cmd("git", &full)
 }
 
+/// Is `dir` a usable checkout? A clone that dies partway (no credentials, a
+/// dropped network) can leave a `.git` behind, so its mere existence proves
+/// nothing — every later `git -C` then fails with "not a git repository" and
+/// the sync dir stays wedged. Ask git itself instead.
+fn is_git_repo(dir: &Path) -> bool {
+    dir.join(".git").exists() && git(dir, &["rev-parse", "--git-dir"]).is_ok()
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SyncStatus {
@@ -2036,7 +2044,7 @@ fn cmd_exists(prog: &str) -> bool {
 #[tauri::command]
 fn sync_status(app: AppHandle) -> Result<SyncStatus, String> {
     let cfg = load_config(&app)?;
-    let cloned = sync_dir(&app)?.join(".git").exists();
+    let cloned = is_git_repo(&sync_dir(&app)?);
     Ok(SyncStatus {
         repo: cfg.sync_repo,
         cloned,
@@ -2058,8 +2066,15 @@ fn sync_setup(app: AppHandle, name: String) -> Result<String, String> {
     // Create the repo (ignore error if it already exists).
     let _ = run_cmd("gh", &["repo", "create", &slug, "--private"]);
 
+    // `gh` authenticates with its own token, but plain `git` doesn't see it —
+    // it needs a credential helper. On a machine where git has never been set
+    // up (a fresh Windows box, typically) cloning or pushing a *private* repo
+    // fails without this, while the same code works on a dev Mac that already
+    // had credentials. Idempotent, so it's safe to run every time.
+    let _ = run_cmd("gh", &["auth", "setup-git"]);
+
     let sync = sync_dir(&app)?;
-    if sync.join(".git").exists() {
+    if is_git_repo(&sync) {
         git(
             &sync,
             &[
@@ -2070,17 +2085,17 @@ fn sync_setup(app: AppHandle, name: String) -> Result<String, String> {
             ],
         )?;
     } else {
+        // Not a repo — including the half-cloned case, which we clear out so a
+        // retry can actually recover instead of wedging on the same error.
         if sync.exists() {
-            fs::remove_dir_all(&sync).ok();
+            fs::remove_dir_all(&sync)
+                .map_err(|e| format!("couldn't clear the old sync folder: {e}"))?;
         }
-        run_cmd(
-            "git",
-            &[
-                "clone",
-                &format!("https://github.com/{slug}.git"),
-                sync.to_str().unwrap(),
-            ],
-        )?;
+        // `gh repo clone` rather than `git clone`: it carries gh's credentials,
+        // so a private backup repo works without a separate git login.
+        run_cmd("gh", &["repo", "clone", &slug, sync.to_str().unwrap()]).map_err(|e| {
+            format!("couldn't clone {slug}: {e}\n\nIf this is an auth problem, run `gh auth login` in a terminal and try again.")
+        })?;
     }
 
     let mut cfg = load_config(&app)?;
@@ -2102,7 +2117,7 @@ struct ManifestEntry {
 #[tauri::command]
 fn sync_push(app: AppHandle) -> Result<String, String> {
     let sync = sync_dir(&app)?;
-    if !sync.join(".git").exists() {
+    if !is_git_repo(&sync) {
         return Err("sync isn't set up yet".into());
     }
     let cfgdir = config_dir(&app)?;
@@ -2195,7 +2210,7 @@ struct PullResult {
 #[tauri::command]
 fn sync_pull(app: AppHandle) -> Result<PullResult, String> {
     let sync = sync_dir(&app)?;
-    if !sync.join(".git").exists() {
+    if !is_git_repo(&sync) {
         return Err("sync isn't set up yet".into());
     }
     git(&sync, &["pull", "--no-edit"])?;

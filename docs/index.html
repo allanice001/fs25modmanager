@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FS25 Mod Manager — mod and map manager for Farming Simulator 25</title>
+<meta name="description" content="Keep every Farming Simulator 25 mod and map zip in one library folder, flip them in and out of the game, and get warned when a mod won't work on the map you're playing.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --soil:  #241c17;
+    --loam:  #33281f;
+    --furrow:#1a1410;
+    --straw: #e8c87a;
+    --sown:  #7fa653;
+    --chalk: #efe7da;
+    --muted: #a2937f;
+    --rust:  #c4643a;
+
+    --display: "Bricolage Grotesque", system-ui, sans-serif;
+    --body: "Instrument Sans", system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+
+    --gutter: clamp(1.25rem, 5vw, 4rem);
+    --measure: 68rem;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--soil);
+    color: var(--chalk);
+    font-family: var(--body);
+    font-size: 1.0625rem;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: var(--measure);
+    margin-inline: auto;
+    padding-inline: var(--gutter);
+  }
+
+  a { color: var(--straw); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--straw);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  h1, h2, h3 { font-family: var(--display); font-weight: 700; line-height: 1.05; margin: 0; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .8125rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 1.5rem;
+  }
+  .eyebrow b { color: var(--straw); font-weight: 500; }
+
+  /* ---------- hero ---------- */
+
+  .hero { padding-block: clamp(3.5rem, 9vw, 7rem) clamp(3rem, 7vw, 5rem); }
+
+  .hero-grid {
+    display: grid;
+    gap: clamp(2.5rem, 6vw, 4.5rem);
+    grid-template-columns: 1fr;
+    align-items: center;
+  }
+  @media (min-width: 62rem) {
+    .hero-grid { grid-template-columns: 1.05fr .95fr; }
+  }
+
+  h1 {
+    font-size: clamp(2.75rem, 8vw, 5.25rem);
+    font-variation-settings: "wdth" 88;
+    letter-spacing: -.02em;
+    text-wrap: balance;
+  }
+  h1 .and { color: var(--sown); }
+
+  .thesis {
+    font-size: clamp(1.0625rem, 2vw, 1.25rem);
+    color: var(--chalk);
+    max-width: 34ch;
+    margin: 1.5rem 0 0;
+  }
+  .thesis em { color: var(--straw); font-style: normal; }
+
+  .actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 2.25rem; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .8rem 1.4rem;
+    font-family: var(--body);
+    font-weight: 600;
+    font-size: .9375rem;
+    border-radius: 3px;
+    text-decoration: none;
+    border: 1px solid transparent;
+    transition: transform .15s ease, background-color .15s ease;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-primary { background: var(--straw); color: var(--furrow); }
+  .btn-primary:hover { background: #f2d692; }
+  .btn-ghost { border-color: #5a4a3a; color: var(--chalk); }
+  .btn-ghost:hover { background: var(--loam); }
+
+  .platforms {
+    font-family: var(--mono);
+    font-size: .8125rem;
+    color: var(--muted);
+    margin-top: 1.25rem;
+  }
+
+  /* ---------- signature: the field ---------- */
+
+  .field {
+    background: var(--furrow);
+    border: 1px solid #3d3025;
+    border-radius: 4px;
+    padding: 1.25rem;
+    box-shadow: 0 24px 60px -30px rgba(0,0,0,.9);
+  }
+
+  .field-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-family: var(--mono);
+    font-size: .75rem;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding-bottom: .875rem;
+    margin-bottom: .875rem;
+    border-bottom: 1px solid #33281f;
+  }
+
+  .furrow {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: .6rem .75rem;
+    margin-bottom: 3px;
+    border-radius: 2px;
+    background: #221a15;
+    overflow: hidden;
+  }
+  .furrow::before {
+    content: "";
+    position: absolute;
+    inset: 0 100% 0 0;
+    background: linear-gradient(90deg, rgba(127,166,83,.26), rgba(127,166,83,.06));
+    border-left: 2px solid var(--sown);
+    animation: sow .7s cubic-bezier(.2,.7,.3,1) forwards;
+  }
+  .furrow.fallow::before { animation: none; inset: 0 100% 0 0; }
+
+  .furrow:nth-child(2)::before { animation-delay: .10s; }
+  .furrow:nth-child(3)::before { animation-delay: .18s; }
+  .furrow:nth-child(4)::before { animation-delay: .26s; }
+  .furrow:nth-child(5)::before { animation-delay: .34s; }
+  .furrow:nth-child(6)::before { animation-delay: .42s; }
+  .furrow:nth-child(7)::before { animation-delay: .50s; }
+
+  @keyframes sow { to { inset: 0 0 0 0; } }
+
+  .furrow span {
+    position: relative;
+    font-family: var(--mono);
+    font-size: .8125rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .furrow .name { color: var(--chalk); }
+  .furrow.fallow .name { color: #6f6153; }
+  .furrow .state { color: var(--sown); font-size: .6875rem; letter-spacing: .08em; text-transform: uppercase; }
+  .furrow.fallow .state { color: #6f6153; }
+  .furrow.flagged .state { color: var(--rust); }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .furrow::before { animation: none; inset: 0; }
+    .furrow.fallow::before { inset: 0 100% 0 0; }
+    .btn:hover { transform: none; }
+  }
+
+  /* ---------- generic sections ---------- */
+
+  .band { padding-block: clamp(3.5rem, 8vw, 6rem); border-top: 1px solid #33281f; }
+  .band-loam { background: var(--loam); }
+
+  h2 {
+    font-size: clamp(1.75rem, 4vw, 2.5rem);
+    font-variation-settings: "wdth" 92;
+    letter-spacing: -.015em;
+    margin-bottom: 1rem;
+  }
+  .lede { color: var(--muted); max-width: 58ch; margin: 0 0 2.5rem; }
+
+  .flow {
+    display: grid;
+    gap: 1.25rem;
+    grid-template-columns: 1fr;
+  }
+  @media (min-width: 48rem) { .flow { grid-template-columns: repeat(3, 1fr); } }
+
+  .step {
+    background: var(--furrow);
+    border: 1px solid #3d3025;
+    border-radius: 4px;
+    padding: 1.5rem;
+  }
+  .step h3 { font-size: 1.1875rem; margin-bottom: .5rem; }
+  .step p { color: var(--muted); font-size: .9375rem; margin: 0; }
+  .step .path {
+    display: block;
+    font-family: var(--mono);
+    font-size: .75rem;
+    color: var(--straw);
+    margin-top: .875rem;
+    word-break: break-all;
+  }
+
+  .tags { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .875rem; }
+  .tag {
+    font-family: var(--mono);
+    font-size: .75rem;
+    padding: .2rem .55rem;
+    border-radius: 2px;
+    background: rgba(127,166,83,.14);
+    color: var(--sown);
+    border: 1px solid rgba(127,166,83,.3);
+  }
+  .tag.missing {
+    background: rgba(196,100,58,.14);
+    color: var(--rust);
+    border-color: rgba(196,100,58,.35);
+  }
+
+  .note {
+    border-left: 2px solid var(--rust);
+    padding: .25rem 0 .25rem 1.25rem;
+    margin-top: 2rem;
+    color: var(--muted);
+    font-size: .9375rem;
+    max-width: 60ch;
+  }
+  .note strong { color: var(--chalk); font-weight: 600; }
+
+  /* ---------- policy ---------- */
+
+  .policy { max-width: 46rem; }
+  .policy h3 {
+    font-size: 1.125rem;
+    margin: 2.5rem 0 .75rem;
+    font-variation-settings: "wdth" 95;
+  }
+  .policy p { color: var(--muted); }
+  .policy ul { color: var(--muted); padding-left: 1.1rem; }
+  .policy li { margin-bottom: .625rem; }
+  .policy li strong { color: var(--chalk); font-weight: 600; }
+
+  table { border-collapse: collapse; width: 100%; margin-top: .5rem; font-size: .9375rem; }
+  th, td { text-align: left; padding: .6rem .75rem; border-bottom: 1px solid #3d3025; }
+  th {
+    font-family: var(--mono);
+    font-size: .75rem;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  td { color: var(--muted); }
+  .scroll-x { overflow-x: auto; }
+
+  footer {
+    border-top: 1px solid #33281f;
+    padding-block: 2.5rem 3.5rem;
+    color: var(--muted);
+    font-size: .875rem;
+  }
+  footer p { margin: 0 0 .5rem; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <p class="eyebrow">Farming Simulator 25 · <b>v0.1.15</b> · macOS &amp; Windows</p>
+      <h1>Sow your mods,<br>leave the rest <span class="and">fallow</span>.</h1>
+      <p class="thesis">
+        Every mod and map zip you download lives in <em>one library folder</em>.
+        Flip each one in or out of the game without ever moving the file itself.
+      </p>
+      <div class="actions">
+        <a class="btn btn-primary" href="https://github.com/allanice001/fs25modmanager/releases/latest">Download the latest release</a>
+        <a class="btn btn-ghost" href="https://github.com/allanice001/fs25modmanager">Read the source</a>
+      </div>
+      <p class="platforms">Apache-2.0 · Tauri + Rust + React</p>
+    </div>
+
+    <div class="field" role="img" aria-label="Illustration of a mod library: five mods enabled in the game's mods folder, two left disabled in the library, one flagged as incompatible with the current map.">
+      <div class="field-head"><span>Library</span><span>Flat Map · active</span></div>
+      <div class="furrow"><span class="name">FS25_Fendt_Vario_1000.zip</span><span class="state">Sown</span></div>
+      <div class="furrow"><span class="name">FS25_BigBud_747.zip</span><span class="state">Sown</span></div>
+      <div class="furrow fallow flagged"><span class="name">FS25_Courseplay.zip</span><span class="state">Needs fields</span></div>
+      <div class="furrow"><span class="name">FS25_Krone_BigX.zip</span><span class="state">Sown</span></div>
+      <div class="furrow fallow"><span class="name">FS25_SeasonsGeo_Alpine.zip</span><span class="state">Fallow</span></div>
+      <div class="furrow"><span class="name">FS25_Lizard_Pickup.zip</span><span class="state">Sown</span></div>
+      <div class="furrow"><span class="name">FS25_TerraFarm.zip</span><span class="state">Sown</span></div>
+    </div>
+  </div>
+</header>
+
+<section class="band">
+  <div class="wrap">
+    <h2>Your library is the source of truth</h2>
+    <p class="lede">
+      The game only ever sees a link. Enabling a mod places that link in the mods
+      folder; disabling removes it. Your downloaded zip is never copied, moved,
+      or deleted.
+    </p>
+
+    <div class="flow">
+      <div class="step">
+        <h3>Keep</h3>
+        <p>Drop every mod and map zip you download into one folder. That folder is yours and the app never writes over it.</p>
+        <code class="path">~/Documents/FS25ModLibrary</code>
+      </div>
+      <div class="step">
+        <h3>Link</h3>
+        <p>Enabling a mod hardlinks it into the game — no duplicated data, instant even for multi-gigabyte maps, and the game reads it as a real file.</p>
+        <code class="path">…/FarmingSimulator2025/mods</code>
+      </div>
+      <div class="step">
+        <h3>Play</h3>
+        <p>Disabling removes only the link. Swap whole mod sets between saves without re-downloading a thing.</p>
+        <code class="path">savegame1 … savegame20</code>
+      </div>
+    </div>
+
+    <p class="note">
+      <strong>Symlinks don't work for FS25.</strong> The Giants engine won't follow them
+      in the mods folder, so symlinked mods fail to load silently. Hardlinks are the
+      default here for exactly that reason.
+    </p>
+  </div>
+</section>
+
+<section class="band band-loam">
+  <div class="wrap">
+    <h2>Know before you load</h2>
+    <p class="lede">
+      Maps advertise what they have. Mods declare what they need. Pick the map
+      you're playing and anything that can't work on it gets flagged before the
+      game silently swallows it.
+    </p>
+
+    <div class="flow">
+      <div class="step">
+        <h3>Flat Map provides</h3>
+        <p>A field-less sandbox map offers only a fraction of what scripted mods expect.</p>
+        <div class="tags">
+          <span class="tag">roads</span>
+          <span class="tag">selling-points</span>
+        </div>
+      </div>
+      <div class="step">
+        <h3>Courseplay requires</h3>
+        <p>Course generation needs real fieldwork to plan against, so it gets flagged here.</p>
+        <div class="tags">
+          <span class="tag">roads</span>
+          <span class="tag missing">fields</span>
+        </div>
+      </div>
+      <div class="step">
+        <h3>You decide</h3>
+        <p>Tags are seeded for well-known mods and fully editable per item. Disagree with a flag? Change it.</p>
+        <div class="tags">
+          <span class="tag">editable</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band" id="install">
+  <div class="wrap">
+    <h2>Install</h2>
+    <p class="lede">
+      Grab the build for your platform from the latest release. The app checks
+      for its own updates and will tell you when a new version is out.
+    </p>
+
+    <div class="flow">
+      <div class="step">
+        <h3>macOS</h3>
+        <p>Signed with an Apple Developer ID and notarized, so it opens with no Gatekeeper warning.</p>
+        <code class="path">.dmg (Apple silicon)</code>
+      </div>
+      <div class="step">
+        <h3>Windows</h3>
+        <p>Not yet code-signed. See the warning below before you install.</p>
+        <code class="path">.msi / .exe</code>
+      </div>
+      <div class="step">
+        <h3>Linux</h3>
+        <p>Paths are detected and the code is OS-aware, but no build is published yet. Build from source.</p>
+        <code class="path">pnpm tauri build</code>
+      </div>
+    </div>
+
+    <p class="note">
+      <strong>Windows will warn you, and on some machines block the app.</strong>
+      The Windows build carries no code signature yet, so SmartScreen flags it —
+      and on a clean Windows 11 install, Smart App Control may refuse to run it
+      with no "run anyway" option. Free code signing through the SignPath
+      Foundation is in progress; the policy below is what will apply once it lands.
+    </p>
+  </div>
+</section>
+
+<section class="band band-loam" id="code-signing">
+  <div class="wrap policy">
+    <p class="eyebrow">Required disclosure</p>
+    <h2>Code signing policy</h2>
+    <p>
+      This is the published code signing policy for FS25 Mod Manager, as required
+      by the SignPath Foundation free code signing programme for open source.
+    </p>
+
+    <h3>Certificate and signing</h3>
+    <p>
+      Free code signing for the Windows binaries of this project is provided by
+      <a href="https://signpath.io/">SignPath.io</a>, with a certificate issued by
+      the <a href="https://signpath.org/">SignPath Foundation</a>.
+    </p>
+    <p>
+      Signing happens only inside the project's public GitHub Actions release
+      pipeline, triggered by pushing a version tag. No maintainer holds the
+      signing key, and no binary is signed from a local machine. SignPath verifies
+      that each submitted artifact was produced by that pipeline from this
+      repository before it is signed. See the
+      <a href="https://docs.signpath.io/">SignPath documentation</a> for how that
+      verification works.
+    </p>
+    <p>
+      macOS builds are signed and notarized separately with an Apple Developer ID
+      certificate held by the maintainer. That is unrelated to the SignPath
+      Foundation certificate.
+    </p>
+
+    <h3>Team roles</h3>
+    <p>
+      This is a single-maintainer project. All three roles are currently held by
+      the same person, and this section will be updated if that changes.
+    </p>
+    <div class="scroll-x">
+      <table>
+        <thead>
+          <tr><th>Role</th><th>Who</th><th>Responsibility</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Author</td><td><a href="https://github.com/allanice001">@allanice001</a></td><td>Writes and modifies source code</td></tr>
+          <tr><td>Reviewer</td><td><a href="https://github.com/allanice001">@allanice001</a></td><td>Reviews and approves changes to <code>main</code></td></tr>
+          <tr><td>Approver</td><td><a href="https://github.com/allanice001">@allanice001</a></td><td>Authorises releases and signing requests</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Multi-factor authentication is enabled on all accounts with write access to
+      this repository and on the SignPath account.
+    </p>
+
+    <h3>Privacy statement</h3>
+    <p>
+      FS25 Mod Manager does not collect analytics, telemetry, or personal data,
+      and does not transmit any information about you or your files to the
+      maintainer. It makes network requests only in these cases, all of them
+      initiated by something you do in the app:
+    </p>
+    <ul>
+      <li><strong>Farming Simulator ModHub</strong> (<code>farming-simulator.com</code>) — when you browse or search mods in the Discover view. Responses are cached locally.</li>
+      <li><strong>Giants Software CDN</strong> (<code>giants-software.com</code>) — when you download a mod you selected in Discover. This is the same host the ModHub website serves downloads from.</li>
+      <li><strong>GitHub Releases</strong> (<code>github.com</code>) — when the app checks whether a newer version of itself exists.</li>
+    </ul>
+    <p>
+      Everything else — your mod library, configuration, tag catalog, and scenario
+      data — is stored locally on your own machine and never leaves it. The app
+      requires no account and has no server component operated by the maintainer.
+    </p>
+    <p>
+      Optional GitHub backup: if you set up external storage in Settings, the app
+      pushes your scenarios, profiles, tag catalog, and savegames to a private
+      GitHub repository <em>that you own</em>, using your own GitHub login. Mods
+      themselves are not uploaded — only a manifest of which ones you had, so they
+      can be re-downloaded from ModHub on another machine.
+    </p>
+
+    <h3>Reporting a problem</h3>
+    <p>
+      If you believe a signed binary attributed to this project is malicious,
+      tampered with, or was not built from this repository, please
+      <a href="https://github.com/allanice001/fs25modmanager/issues">open an issue</a>
+      and, if it concerns the certificate itself, contact the SignPath Foundation.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>FS25 Mod Manager — an independent, unofficial tool. Not affiliated with or endorsed by GIANTS Software.</p>
+    <p>Apache-2.0 · <a href="https://github.com/allanice001/fs25modmanager">github.com/allanice001/fs25modmanager</a></p>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -3,6 +3,8 @@
 A small cross-platform desktop app (Tauri + React + Rust) for managing Farming
 Simulator 25 mods and maps.
 
+**Homepage:** <https://allanice001.github.io/fs25modmanager/> (source in `docs/`)
+
 Your downloaded mod/map `.zip` files live in one **library folder**. The app
 lets you flip each one in or out of the game's **mods folder**, auto-detects
 which archives are maps, and flags mods that won't work on the map you're
